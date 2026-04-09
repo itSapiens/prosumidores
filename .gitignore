@@ -3,28 +3,66 @@ node_modules/
 
 # Build
 dist/
-
-# Entorno local
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+build/
 
 # Logs
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# Editor
+# Variables de entorno
+.env
+.env.*
+!.env.example
+
+# Archivos del sistema
 .DS_Store
-.vscode/
-*.swp
-*.swo
+Thumbs.db
 
-# Claude Code (sesiones locales, no necesarias en repo)
-.claude/
+# IDE / Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
 
-# Archivos temporales
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Cobertura
+coverage/
+.nyc_output/
+
+# Cachés
+.cache/
+.parcel-cache/
+.vite/
+.eslintcache
+
+# Temporales
+tmp/
+temp/
 *.tmp
-*.temp
+
+# Archivos de despliegue locales opcionales
+*.local
+
+# Salidas de Docker que no quieras versionar
+docker-compose.override.yml
+
+# Certificados o claves
+*.pem
+*.key
+*.crt
+
+# Archivos de respaldo
+*.bak
+*.old
+*.orig
