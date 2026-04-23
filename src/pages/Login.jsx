@@ -2,20 +2,30 @@ import { useState } from 'react'
 import { supabaseAuth } from '../lib/supabase.js'
 
 export default function Login() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function handleLogin(e) {
-    e.preventDefault()
+  async function handleGoogleLogin() {
     setError('')
     setLoading(true)
-    const { error } = await supabaseAuth.auth.signInWithPassword({ email, password })
-    if (error) setError(error.message === 'Invalid login credentials'
-      ? 'Email o contraseña incorrectos'
-      : error.message)
-    setLoading(false)
+    const { error } = await supabaseAuth.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin,
+        queryParams: {
+          // hd = hosted domain: solo acepta cuentas de este dominio
+          // (doble seguro: además de "Internal" en Google Cloud)
+          hd: 'sapiensenergia.es',
+          // Fuerza a elegir cuenta si el usuario tiene varias
+          prompt: 'select_account',
+        },
+      },
+    })
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+    }
+    // Si no hay error, Supabase redirige a Google y no volvemos aquí
   }
 
   return (
@@ -36,7 +46,7 @@ export default function Login() {
         position: 'relative',
         overflow: 'hidden',
       }}>
-        {/* Círculo decorativo */}
+        {/* Círculos decorativos */}
         <div style={{
           position: 'absolute', top: -80, right: -80,
           width: 320, height: 320, borderRadius: '50%',
@@ -75,7 +85,7 @@ export default function Login() {
         }} />
       </div>
 
-      {/* Panel derecho — formulario */}
+      {/* Panel derecho — login */}
       <div style={{
         width: 420,
         display: 'flex',
@@ -90,56 +100,70 @@ export default function Login() {
               Iniciar sesión
             </div>
             <div style={{ fontSize: 13, color: '#706F6F' }}>
-              Accede con tu cuenta de Sapiens Energía
+              Accede con tu cuenta corporativa de Sapiens Energía
             </div>
           </div>
 
-          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div className="form-group">
-              <label className="form-label">Email</label>
-              <input
-                className="form-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="usuario@sapiensenergia.es"
-                required
-                autoFocus
-              />
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              background: '#fff',
+              color: '#3c4043',
+              border: '1px solid #dadce0',
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 500,
+              cursor: loading ? 'wait' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              transition: 'box-shadow .2s, background .2s',
+            }}
+            onMouseEnter={e => {
+              if (!loading) e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,.12)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.boxShadow = 'none'
+            }}
+          >
+            {/* Logo oficial de Google (SVG, no requiere descarga) */}
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+              <path fill="none" d="M0 0h48v48H0z"/>
+            </svg>
+            {loading ? 'Redirigiendo a Google...' : 'Continuar con Google'}
+          </button>
+
+          {error && (
+            <div style={{
+              marginTop: 16,
+              padding: '10px 14px', borderRadius: 8,
+              background: '#FCEBEB', color: '#A32D2D',
+              fontSize: 13, fontWeight: 500,
+              border: '1px solid #E24B4A',
+            }}>
+              {error}
             </div>
+          )}
 
-            <div className="form-group">
-              <label className="form-label">Contraseña</label>
-              <input
-                className="form-input"
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-              />
-            </div>
-
-            {error && (
-              <div style={{
-                padding: '10px 14px', borderRadius: 8,
-                background: '#FCEBEB', color: '#A32D2D',
-                fontSize: 13, fontWeight: 500,
-                border: '1px solid #E24B4A',
-              }}>
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: '100%', justifyContent: 'center', marginTop: 4, padding: '10px 14px', fontSize: 14 }}
-              disabled={loading}
-            >
-              {loading ? 'Entrando...' : 'Entrar'}
-            </button>
-          </form>
+          <div style={{
+            marginTop: 24,
+            fontSize: 12,
+            color: '#706F6F',
+            textAlign: 'center',
+            lineHeight: 1.5,
+          }}>
+            Solo se permite acceso a cuentas del dominio<br/>
+            <strong style={{ color: '#000054' }}>@sapiensenergia.es</strong>
+          </div>
 
           <div style={{
             marginTop: 36, paddingTop: 20,
