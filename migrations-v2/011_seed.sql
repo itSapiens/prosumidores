@@ -14,7 +14,7 @@ BEGIN;
 
 DO $$
 DECLARE
-  v_admin_email    text := 'CAMBIAME@sapiensenergia.es';  -- ← CAMBIA ESTO
+  v_admin_email    text := 'carlos@sapiensenergia.es';
   v_admin_user_id  uuid;
   v_empresa_id     uuid;
   v_distribuidora_id uuid;
@@ -38,22 +38,31 @@ BEGIN
     telefono, email, representante_legal, creditor_id_sepa
   ) VALUES (
     'Sapiens Energía',
-    'B00000000',             -- ← Pon el CIF real
-    'Dirección sede',        -- ← Pon la dirección real
-    'Municipio',
-    '00000',
-    'Provincia',
-    '000000000',
+    'F40642928',
+    'Garvi, 1 pta 70',
+    'Canet d''en Berenger',
+    '46529',
+    'Valencia',
+    '960992777',
     'info@sapiensenergia.es',
-    'Representante Legal',   -- ← Pon el nombre real del representante
-    'ES00ZZZ00000000'        -- ← Pon el Creditor ID SEPA real
+    'Juan Carlos Sacristan',
+    'ES67000F40642928'
   )
-  ON CONFLICT (cif) DO UPDATE SET nombre = EXCLUDED.nombre
+  ON CONFLICT (cif) DO UPDATE SET
+    nombre              = EXCLUDED.nombre,
+    direccion           = EXCLUDED.direccion,
+    municipio           = EXCLUDED.municipio,
+    codigo_postal       = EXCLUDED.codigo_postal,
+    provincia           = EXCLUDED.provincia,
+    telefono            = EXCLUDED.telefono,
+    email               = EXCLUDED.email,
+    representante_legal = EXCLUDED.representante_legal,
+    creditor_id_sepa    = EXCLUDED.creditor_id_sepa
   RETURNING id INTO v_empresa_id;
 
   -- Si ya existía, obtener su id
   IF v_empresa_id IS NULL THEN
-    SELECT id INTO v_empresa_id FROM public.empresas WHERE cif = 'B00000000';
+    SELECT id INTO v_empresa_id FROM public.empresas WHERE cif = 'F40642928';
   END IF;
 
   -- --------------------------------------------------------
