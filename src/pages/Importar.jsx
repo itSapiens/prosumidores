@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { parsearExcel, generarPlantillaExcel, exportarErroresExcel } from '../utils/excelParser.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 export default function Importar() {
   const navigate = useNavigate()
@@ -15,6 +16,7 @@ export default function Importar() {
   const [installationId, setInstallationId] = useState(installationIdPresel)
   const [importando, setImportando] = useState(false)
   const [importados, setImportados] = useState(0)
+  const [erroresImport, setErroresImport] = useState([]) // [{ fila, nombre, dni, error }]
   const [error, setError] = useState('')
   const inputRef = useRef()
 
@@ -58,52 +60,105 @@ export default function Importar() {
 
     setImportando(true)
     setImportados(0)
+    setErroresImport([])
+
+    // Obtener empresa_id del usuario (necesario por la constraint UNIQUE(empresa_id, dni))
+    const { data: membership, error: membershipError } = await supabase
+      .from('user_empresas')
+      .select('empresa_id')
+      .limit(1)
+      .maybeSingle()
+
+    if (membershipError || !membership?.empresa_id) {
+      setImportando(false)
+      alert('No se pudo determinar tu empresa. Contacta con el administrador.')
+      return
+    }
+    const empresa_id = membership.empresa_id
+
     let importadosCount = 0
-    let erroresCount = 0
+    const erroresDetalle = []
 
     for (const fila of filas) {
       if (!fila.valido && soloValidos) continue
       const d = fila.datos
+      const dni = (d.dni || '').trim().toUpperCase()
 
-      // Upsert cliente (por DNI)
+      // ----- Upsert cliente (por empresa_id + dni) -----
+      // Nota: email/telefono/direccion_completa/codigo_postal/poblacion/provincia
+      // son NOT NULL DEFAULT '' en el schema v2 → enviamos '' (no null) cuando falta.
+      // cups/iban sí son nullables, se mantienen null.
       const clientPayload = {
+        empresa_id,
         nombre: (d.nombre || '').trim(),
         apellidos: (d.apellidos || '').trim(),
-        dni: (d.dni || '').trim().toUpperCase(),
-        cups: d.cups || null,
-        iban: d.iban || null,
-        email: d.email || null,
-        telefono: d.telefono ? d.telefono.toString() : null,
-        direccion_completa: d.direccion_completa || null,
-        codigo_postal: d.codigo_postal ? d.codigo_postal.toString() : null,
-        poblacion: d.poblacion || null,
-        provincia: d.provincia || null,
-        tipo_factura: ['2TD', '3TD'].includes(d.tipo_factura) ? d.tipo_factura : '2TD',
+        dni,
+        cups: d.cups ? d.cups.toString().trim().toUpperCase() : null,
+        iban: d.iban ? d.iban.toString().replace(/\s+/g, '').toUpperCase() : null,
+        email: (d.email || '').toString().trim().toLowerCase(),
+        telefono: (d.telefono || '').toString().trim(),
+        direccion_completa: (d.direccion_completa || '').toString().trim(),
+        codigo_postal: (d.codigo_postal || '').toString().trim(),
+        poblacion: (d.poblacion || '').toString().trim(),
+        provincia: (d.provincia || '').toString().trim(),
+        tipo_factura: ['2.0TD', '3.0TD', '6.1TD', '2TD', '3TD'].includes(d.tipo_factura) ? d.tipo_factura : '2TD',
       }
 
       const { data: client, error: clientError } = await supabase
         .from('clients')
-        .upsert(clientPayload, { onConflict: 'dni' })
-        .select('id').single()
+        .upsert(clientPayload, { onConflict: 'empresa_id,dni' })
+        .select('id')
+        .single()
 
       if (clientError || !client) {
-        erroresCount++
+        erroresDetalle.push({
+          fila: fila.fila,
+          nombre: `${d.nombre || ''} ${d.apellidos || ''}`.trim(),
+          dni,
+          error: mapSupabaseError(clientError, { entidad: 'cliente' }) || 'No se pudo guardar el cliente',
+        })
+        setImportados(prev => prev + 1)
         continue
       }
 
-      // Upsert partícipe
+      // ----- Upsert partícipe (manual: el índice único es parcial y upsert() no lo soporta) -----
       const coef = parseFloat(d.coeficiente_reparto) || 0
-      const { error: partError } = await supabase
-        .from('participes')
-        .upsert({
-          installation_id: installationId,
-          client_id: client.id,
-          coeficiente_reparto: coef,
-          active: true,
-        }, { onConflict: 'installation_id,client_id' })
 
-      if (!partError) importadosCount++
-      else erroresCount++
+      const { data: existenteActivo } = await supabase
+        .from('participes')
+        .select('id')
+        .eq('installation_id', installationId)
+        .eq('client_id', client.id)
+        .eq('active', true)
+        .maybeSingle()
+
+      let partError
+      if (existenteActivo) {
+        ;({ error: partError } = await supabase
+          .from('participes')
+          .update({ coeficiente_reparto: coef })
+          .eq('id', existenteActivo.id))
+      } else {
+        ;({ error: partError } = await supabase
+          .from('participes')
+          .insert({
+            installation_id: installationId,
+            client_id: client.id,
+            coeficiente_reparto: coef,
+            active: true,
+          }))
+      }
+
+      if (!partError) {
+        importadosCount++
+      } else {
+        erroresDetalle.push({
+          fila: fila.fila,
+          nombre: `${d.nombre || ''} ${d.apellidos || ''}`.trim(),
+          dni,
+          error: mapSupabaseError(partError, { entidad: 'partícipe' }),
+        })
+      }
 
       setImportados(prev => prev + 1)
     }
@@ -111,8 +166,10 @@ export default function Importar() {
     setImportando(false)
     setStep(3)
     setImportados(importadosCount)
+    setErroresImport(erroresDetalle)
 
-    if (installationId && importadosCount > 0) {
+    // Solo navegar automáticamente si TODO fue bien
+    if (installationId && importadosCount > 0 && erroresDetalle.length === 0) {
       setTimeout(() => navigate(`/proyectos/${installationId}`), 1500)
     }
   }
@@ -274,23 +331,63 @@ export default function Importar() {
   )
 
   // PASO 3: Completado
-  if (step === 3) return (
-    <div style={{ maxWidth: 480, margin: '60px auto', textAlign: 'center' }}>
-      <div style={{ width: 56, height: 56, background: '#E1F5EE', borderRadius: '50%', margin: '0 auto 16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#54D9C7" strokeWidth="2.5" strokeLinecap="round"><path d="M5 14l6 6 12-12"/></svg>
-      </div>
-      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Importación completada</div>
-      <div style={{ color: 'var(--text-secondary)', marginBottom: 24 }}>
-        Se han importado <strong>{importados} partícipes</strong> correctamente.
-      </div>
-      <div className="flex-row" style={{ justifyContent: 'center', gap: 8 }}>
-        <button className="btn" onClick={() => { setStep(1); setResultado(null) }}>Importar más</button>
-        {installationId && (
-          <button className="btn btn-primary" onClick={() => navigate(`/proyectos/${installationId}`)}>
-            Ver instalación →
-          </button>
+  if (step === 3) {
+    const hayErrores = erroresImport.length > 0
+    const todoFallo = importados === 0 && hayErrores
+    const iconoColor = todoFallo ? '#E24B4A' : hayErrores ? '#BA7517' : '#54D9C7'
+    const iconoBg = todoFallo ? '#FCEBEB' : hayErrores ? '#FFF5E0' : '#E1F5EE'
+    const titulo = todoFallo ? 'No se importó ningún partícipe' : hayErrores ? 'Importación completada con errores' : 'Importación completada'
+
+    return (
+      <div style={{ maxWidth: 640, margin: '60px auto' }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ width: 56, height: 56, background: iconoBg, borderRadius: '50%', margin: '0 auto 16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {todoFallo ? (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke={iconoColor} strokeWidth="2.5" strokeLinecap="round"><path d="M9 9l10 10M19 9L9 19"/></svg>
+            ) : (
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke={iconoColor} strokeWidth="2.5" strokeLinecap="round"><path d="M5 14l6 6 12-12"/></svg>
+            )}
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{titulo}</div>
+          <div style={{ color: 'var(--text-secondary)' }}>
+            {importados > 0 && <>Se han importado <strong>{importados} partícipes</strong> correctamente.</>}
+            {importados > 0 && hayErrores && <br/>}
+            {hayErrores && <><strong>{erroresImport.length}</strong> fila{erroresImport.length !== 1 ? 's' : ''} con error.</>}
+          </div>
+        </div>
+
+        {hayErrores && (
+          <div className="card mb-16" style={{ marginBottom: 24 }}>
+            <div className="card-title mb-8">Detalle de filas con error</div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Fila</th><th>Nombre</th><th>DNI</th><th>Motivo</th></tr>
+                </thead>
+                <tbody>
+                  {erroresImport.map((e, i) => (
+                    <tr key={i}>
+                      <td>{e.fila}</td>
+                      <td>{e.nombre}</td>
+                      <td className="text-mono">{e.dni}</td>
+                      <td style={{ color: 'var(--danger-text)', fontSize: 12 }}>{e.error}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
+
+        <div className="flex-row" style={{ justifyContent: 'center', gap: 8 }}>
+          <button className="btn" onClick={() => { setStep(1); setResultado(null); setErroresImport([]) }}>Importar más</button>
+          {installationId && (
+            <button className="btn btn-primary" onClick={() => navigate(`/proyectos/${installationId}`)}>
+              Ver instalación →
+            </button>
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 }
