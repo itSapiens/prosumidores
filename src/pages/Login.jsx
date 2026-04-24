@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabaseAuth } from '../lib/supabase.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 export default function Login() {
   const [error, setError] = useState('')
@@ -22,7 +23,7 @@ export default function Login() {
       },
     })
     if (error) {
-      setError(error.message)
+      setError(mapSupabaseError(error))
       setLoading(false)
     }
     // Si no hay error, Supabase redirige a Google y no volvemos aquí

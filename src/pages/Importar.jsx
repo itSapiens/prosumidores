@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { parsearExcel, generarPlantillaExcel, exportarErroresExcel } from '../utils/excelParser.js'
@@ -18,10 +18,16 @@ export default function Importar() {
   const [error, setError] = useState('')
   const inputRef = useRef()
 
-  useState(() => {
-    supabase.from('installations').select('id, nombre_instalacion').eq('active', true).then(({ data }) => {
-      setInstalaciones(data || [])
-    })
+  useEffect(() => {
+    let cancelado = false
+    supabase
+      .from('installations')
+      .select('id, nombre_instalacion')
+      .eq('active', true)
+      .then(({ data }) => {
+        if (!cancelado) setInstalaciones(data || [])
+      })
+    return () => { cancelado = true }
   }, [])
 
   const procesarArchivo = useCallback(async (file) => {

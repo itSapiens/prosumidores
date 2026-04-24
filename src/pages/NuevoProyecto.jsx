@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { validarIBAN, formatearIBAN } from '../utils/validaciones.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 const ORIENTACIONES = [
   { value: 'sur', label: 'Sur' },
@@ -177,7 +178,7 @@ export default function NuevoProyecto() {
           .eq('id', id)
           .select()
           .single()
-        if (error) throw new Error(error.message)
+        if (error) throw new Error(mapSupabaseError(error, { entidad: 'instalación' }))
         if (!updated) throw new Error('No se encontró la instalación o no tienes permisos para editarla.')
         navigate(`/proyectos/${id}`)
       } else {
@@ -186,7 +187,7 @@ export default function NuevoProyecto() {
           .insert(payload)
           .select()
           .single()
-        if (error) throw new Error(error.message)
+        if (error) throw new Error(mapSupabaseError(error, { entidad: 'instalación' }))
         if (data) navigate(`/proyectos/${data.id}`)
       }
     } catch (err) {

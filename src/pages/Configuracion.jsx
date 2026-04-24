@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 export default function Configuracion() {
   const [form, setForm] = useState({
@@ -55,7 +56,7 @@ export default function Configuracion() {
     }
     setGuardando(false)
     if (!error) { setGuardado(true); setTimeout(() => setGuardado(false), 2500) }
-    else alert('Error: ' + error.message)
+    else alert(mapSupabaseError(error, { entidad: 'configuración' }))
   }
 
   if (loading) return <div className="loading"><div className="spinner" />Cargando...</div>

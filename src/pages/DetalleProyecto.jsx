@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { descargarDocumento } from '../utils/pdfGenerator.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 const ORIENT_LABEL = { sur:'Sur', sureste:'Sureste', suroeste:'Suroeste', este:'Este', oeste:'Oeste' }
 
@@ -276,7 +277,7 @@ export default function DetalleProyecto() {
     }
 
     if (error) {
-      alert('Error al añadir partícipe: ' + error.message)
+      alert(mapSupabaseError(error, { entidad: 'partícipe' }))
       return
     }
     await cargarParticipes()

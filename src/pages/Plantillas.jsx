@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 const TIPOS = [
   { id: 'acuerdo_reparto', label: 'Acuerdo de reparto' },
@@ -172,7 +173,7 @@ export default function Plantillas() {
 
     setGuardando(false)
     if (!error) { setGuardado(true); setTimeout(() => setGuardado(false), 2500) }
-    else alert('Error al guardar: ' + error.message)
+    else alert(mapSupabaseError(error, { entidad: 'plantilla' }))
   }
 
   const templateActual = templates[tipoActivo]

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { generarYDescargarZIP, generarPDFAcuerdoRepartoColectivo } from '../utils/pdfGenerator.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 const TIPOS_DOC = [
   { id: 'autorizacion_gestor', label: 'Autorización de gestor', desc: 'Por partícipe · PDF individual' },
@@ -267,7 +268,7 @@ export default function Documentos() {
       await cargarInstalacion()
     } catch (e) {
       console.error('Error registrando estado:', e)
-      alert('PDF generado pero error al guardar estado: ' + e.message)
+      alert('PDF generado pero error al guardar estado: ' + mapSupabaseError(e))
     } finally {
       setGenerandoColectivo(false)
     }
