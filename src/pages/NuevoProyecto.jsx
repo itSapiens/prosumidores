@@ -68,10 +68,13 @@ export default function NuevoProyecto() {
   // Modo vista: URL termina en /datos → formulario bloqueado para solo lectura
   const soloLectura = Boolean(id) && location.pathname.endsWith('/datos')
   const [distribuidoras, setDistribuidoras] = useState([])
+  const [empresas, setEmpresas] = useState([])
+  const [empresaIdOriginal, setEmpresaIdOriginal] = useState('')
   const [loading, setLoading] = useState(false)
   const [guardando, setGuardando] = useState(false)
   const [errores, setErrores] = useState({})
   const [form, setForm] = useState({
+    empresa_id: '',
     nombre_instalacion: '', direccion: '', lat: '', lng: '',
     horas_efectivas: '', potencia_instalada_kwp: '', potencia_nominal_kw: '',
     inclinacion: '', orientacion: 'sur', almacenamiento_kwh: '0',
@@ -90,14 +93,28 @@ export default function NuevoProyecto() {
       if (error) console.error('distribuidoras:', error)
       setDistribuidoras(data || [])
     })
+    // Cargar empresas a las que pertenece el usuario (la RLS filtra automáticamente)
+    supabase.from('empresas').select('id, nombre').eq('active', true).order('nombre')
+      .then(({ data, error }) => {
+        if (error) console.error('empresas:', error)
+        const lista = data || []
+        setEmpresas(lista)
+        // Si solo hay una y estamos creando, preseleccionarla
+        if (!esEdicion && lista.length === 1) {
+          setForm(prev => prev.empresa_id ? prev : { ...prev, empresa_id: lista[0].id })
+        }
+      })
     if (esEdicion) cargarInstalacion()
   }, [id])
 
   async function cargarInstalacion() {
     setLoading(true)
     const { data } = await supabase.from('installations').select('*').eq('id', id).single()
-    if (data) setForm(prev => ({
+    if (data) {
+      setEmpresaIdOriginal(data.empresa_id || '')
+      setForm(prev => ({
       ...prev, ...data,
+      empresa_id: data.empresa_id || '',
       fecha_activacion: data.fecha_activacion || '',
       fecha_activacion_real: data.fecha_activacion_real || '',
       distribuidora_id: data.distribuidora_id || '',
@@ -112,7 +129,8 @@ export default function NuevoProyecto() {
       reserva_fija_eur: data.reserva_fija_eur ?? '',
       calculo_estudios: data.calculo_estudios || 'segun_factura',
       potencia_fija_kwp: data.potencia_fija_kwp ?? '',
-    }))
+      }))
+    }
     setLoading(false)
   }
 
@@ -123,6 +141,7 @@ export default function NuevoProyecto() {
 
   function validar() {
     const e = {}
+    if (!form.empresa_id) e.empresa_id = 'Selecciona la empresa titular'
     if (!form.nombre_instalacion.trim()) e.nombre_instalacion = 'Obligatorio'
     if (!form.direccion.trim()) e.direccion = 'Obligatorio'
     if (!form.potencia_instalada_kwp || isNaN(form.potencia_instalada_kwp)) e.potencia_instalada_kwp = 'Valor inválido'
@@ -172,6 +191,28 @@ export default function NuevoProyecto() {
         active: true,
       }
       if (esEdicion) {
+        // Si la empresa titular cambió, propagar el cambio en cascade
+        // (installations + participes + studies + reservations + documents +
+        // contracts + tokens + acuerdo_versiones) vía RPC atómica.
+        if (form.empresa_id && form.empresa_id !== empresaIdOriginal) {
+          const empOrigen = empresas.find(e => e.id === empresaIdOriginal)?.nombre || 'la empresa actual'
+          const empDestino = empresas.find(e => e.id === form.empresa_id)?.nombre || 'la nueva empresa'
+          const ok = window.confirm(
+            `Vas a cambiar la empresa titular de esta instalación de "${empOrigen}" a "${empDestino}".\n\n` +
+            `Todos los datos relacionados (partícipes, estudios, reservas, contratos, documentos) ` +
+            `pasarán a pertenecer a "${empDestino}".\n\n` +
+            `¿Confirmas el cambio?`
+          )
+          if (!ok) {
+            setGuardando(false)
+            return
+          }
+          const { error: rpcError } = await supabase.rpc('change_installation_empresa', {
+            p_installation_id: id,
+            p_new_empresa_id: form.empresa_id,
+          })
+          if (rpcError) throw new Error(mapSupabaseError(rpcError, { entidad: 'instalación' }))
+        }
         const { data: updated, error } = await supabase
           .from('installations')
           .update(payload)
@@ -182,9 +223,11 @@ export default function NuevoProyecto() {
         if (!updated) throw new Error('No se encontró la instalación o no tienes permisos para editarla.')
         navigate(`/proyectos/${id}`)
       } else {
+        // En creación enviamos empresa_id explícito (necesario si el user pertenece
+        // a >1 empresas; el trigger auto_set_empresa_id falla en ese caso).
         const { data, error } = await supabase
           .from('installations')
-          .insert(payload)
+          .insert({ ...payload, empresa_id: form.empresa_id })
           .select()
           .single()
         if (error) throw new Error(mapSupabaseError(error, { entidad: 'instalación' }))
@@ -249,6 +292,30 @@ export default function NuevoProyecto() {
       <div className="card mb-16">
         <div className="form-section-title">Datos generales</div>
         <div className="form-grid">
+          <div className="form-group full">
+            <label className="form-label">Empresa titular *</label>
+            <select
+              className={`form-select${errores.empresa_id ? ' error' : ''}`}
+              value={form.empresa_id}
+              onChange={e => set('empresa_id', e.target.value)}
+            >
+              <option value="">— Selecciona empresa titular —</option>
+              {empresas.map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+              ))}
+            </select>
+            {errores.empresa_id
+              ? <span className="form-error">{errores.empresa_id}</span>
+              : esEdicion && form.empresa_id !== empresaIdOriginal
+                ? <span className="form-hint" style={{ color: 'var(--warning, #b45309)' }}>
+                    ⚠ Cambiar la empresa titular reasignará todos los datos relacionados (partícipes, estudios, reservas, contratos, documentos) a la nueva empresa.
+                  </span>
+                : esEdicion
+                  ? <span className="form-hint">Empresa titular de esta instalación. Cambiarla reasigna todos los datos relacionados.</span>
+                  : empresas.length === 0
+                    ? <span className="form-error">No hay empresas creadas. Crea una desde Configuración antes de añadir instalaciones.</span>
+                    : <span className="form-hint">Empresa cuyos datos legales aparecerán en los documentos generados</span>}
+          </div>
           <div className="form-group full">
             <label className="form-label">Nombre de la instalación *</label>
             <input className={`form-input${errores.nombre_instalacion ? ' error' : ''}`}

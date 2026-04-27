@@ -11,6 +11,10 @@ dist/
 .env.test.local
 .env.production.local
 
+# Migración v1→v2 (secretos + reportes con PII)
+scripts/.env.migration
+scripts/reports/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

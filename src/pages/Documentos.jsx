@@ -31,8 +31,6 @@ export default function Documentos() {
   useEffect(() => {
     supabase.from('installations').select('id, nombre_instalacion').eq('active', true)
       .then(({ data }) => setInstalaciones(data || []))
-    supabase.from('empresa_config').select('*').limit(1).single()
-      .then(({ data }) => setEmpresa(data))
   }, [])
 
   useEffect(() => {
@@ -40,9 +38,12 @@ export default function Documentos() {
   }, [installationId])
 
   async function cargarInstalacion() {
+    // En v2 cada instalación tiene su propia empresa titular. La cargamos
+    // embebida para que los documentos se generen con los datos legales de
+    // la empresa correspondiente.
     const [{ data: inst }, { data: docs }] = await Promise.all([
       supabase.from('installations')
-        .select('*, distribuidoras(id, nombre, codigo)')
+        .select('*, distribuidoras(id, nombre, codigo), empresas(*)')
         .eq('id', installationId).single(),
       supabase.from('documents').select('*, clients(nombre, apellidos)')
         .eq('installation_id', installationId)
@@ -51,6 +52,7 @@ export default function Documentos() {
     ])
 
     setInstalacion(inst)
+    setEmpresa(inst?.empresas || null)
     setDocumentosExistentes(docs || [])
 
     // Cargar partícipes

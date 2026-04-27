@@ -38,14 +38,14 @@ export default function DetalleProyecto() {
 
   async function cargarDatos() {
     setLoading(true)
-    const [{ data: inst }, { data: emp }] = await Promise.all([
-      supabase.from('installations')
-        .select('*, distribuidoras(id, nombre, codigo)')
-        .eq('id', id).single(),
-      supabase.from('empresa_config').select('*').limit(1).single(),
-    ])
+    // En v2 cada instalación pertenece a una empresa (multi-tenant). Cargamos
+    // la empresa titular embebida en la propia query para que los documentos
+    // se generen con SUS datos legales (no los de una empresa global).
+    const { data: inst } = await supabase.from('installations')
+      .select('*, distribuidoras(id, nombre, codigo), empresas(*)')
+      .eq('id', id).single()
     setInstalacion(inst)
-    setEmpresa(emp)
+    setEmpresa(inst?.empresas || null)
     await refrescarReservas()
     if (inst?.distribuidoras?.id) {
       const { data: tmpl } = await supabase.from('document_templates')
