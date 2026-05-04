@@ -3,6 +3,12 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 COPY package*.json ./
 RUN npm ci
 
@@ -12,13 +18,10 @@ RUN npm run build
 # ── Fase 2: servidor nginx ────────────────────────────────────
 FROM nginx:alpine
 
-# Copiar build
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copiar configuración nginx (SPA routing + PORT dinámico)
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 
-# Cloud Run inyecta PORT como variable de entorno (defecto 8080)
 ENV PORT=8080
 
 EXPOSE 8080

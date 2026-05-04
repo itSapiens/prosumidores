@@ -6,6 +6,19 @@ import { mapSupabaseError } from '../lib/errors.js'
 
 const ORIENT_LABEL = { sur:'Sur', sureste:'Sureste', suroeste:'Suroeste', este:'Este', oeste:'Oeste' }
 
+function isMissingRpcError(error) {
+  const message = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase()
+  return error?.code === 'PGRST202'
+    || message.includes('could not find the function')
+    || (message.includes('function') && message.includes('schema cache'))
+}
+
+function paymentToReservationStatus(paymentStatus, currentReservationStatus) {
+  if (paymentStatus === 'signal_paid' || paymentStatus === 'paid') return 'paid'
+  if (paymentStatus === 'pending' && currentReservationStatus === 'paid') return 'pending_payment'
+  return currentReservationStatus || 'pending_payment'
+}
+
 export default function DetalleProyecto() {
   const navigate = useNavigate()
   const { id } = useParams()
@@ -18,6 +31,7 @@ export default function DetalleProyecto() {
   const [panelParticipe, setPanelParticipe] = useState(null) // partícipe abierto en panel
   const [panelTab, setPanelTab] = useState('datos')
   const [reservas, setReservas] = useState([])
+  const [reservasError, setReservasError] = useState('')
   const [seleccionados, setSeleccionados] = useState(new Set())
   const [bulkTipo, setBulkTipo] = useState('acuerdo_reparto')
   const [bulkEstado, setBulkEstado] = useState('firmado')
@@ -241,39 +255,41 @@ export default function DetalleProyecto() {
       alert(`No se pueden añadir partícipes mientras haya acuerdos firmados en la v${versionActiva.version}. Cierra la versión actual y crea una nueva para hacer cambios.`)
       return
     }
-    // Calcular coeficiente de reparto (decimal 0–1, 6 decimales)
-    // coef = kWp reservados / potencia instalada total
     const coef = instalacion?.potencia_instalada_kwp
       ? parseFloat((reserva.reserved_kwp / instalacion.potencia_instalada_kwp).toFixed(6))
       : 0
 
-    // Buscar registro existente (activo o inactivo) para evitar violación de unique constraint
-    const { data: existente } = await supabase
-      .from('participes')
-      .select('id, active')
-      .eq('installation_id', id)
-      .eq('client_id', reserva.client_id)
-      .maybeSingle()
+    const rpcResult = await supabase
+      .rpc('upsert_participe_from_reservation', { p_reservation_id: reserva.id })
 
     let error
-    if (existente) {
-      if (existente.active) {
-        alert('Este cliente ya es partícipe activo de esta instalación.')
-        return
-      }
-      // Reactivar registro inactivo
-      ;({ error } = await supabase
+    if (rpcResult.error && isMissingRpcError(rpcResult.error)) {
+      const { data: existente } = await supabase
         .from('participes')
-        .update({ active: true, coeficiente_reparto: coef })
-        .eq('id', existente.id))
+        .select('id, active')
+        .eq('installation_id', id)
+        .eq('client_id', reserva.client_id)
+        .maybeSingle()
+
+      if (existente) {
+        if (existente.active) {
+          alert('Este cliente ya es partícipe activo de esta instalación.')
+          return
+        }
+        ;({ error } = await supabase
+          .from('participes')
+          .update({ active: true, coeficiente_reparto: coef })
+          .eq('id', existente.id))
+      } else {
+        ;({ error } = await supabase.from('participes').insert({
+          installation_id: id,
+          client_id: reserva.client_id,
+          coeficiente_reparto: coef,
+          active: true,
+        }))
+      }
     } else {
-      // Crear nuevo
-      ;({ error } = await supabase.from('participes').insert({
-        installation_id: id,
-        client_id: reserva.client_id,
-        coeficiente_reparto: coef,
-        active: true,
-      }))
+      error = rpcResult.error
     }
 
     if (error) {
@@ -285,60 +301,57 @@ export default function DetalleProyecto() {
   }
 
   async function refrescarReservas() {
-    // 1) Cargar reservas base (sin JOINs que puedan fallar por RLS)
     const { data: res, error } = await supabase
-      .from('installation_reservations')
-      .select('*')
-      .eq('installation_id', id)
-      .order('created_at', { ascending: false })
+      .rpc('get_installation_reservations_by_installation', { p_installation_id: id })
 
     if (error) {
       console.error('Error cargando reservas:', error.message)
+      setReservasError(mapSupabaseError(error, { entidad: 'reserva' }) || error.message)
       setReservas([])
       return
     }
 
-    const reservasBase = res || []
-    if (reservasBase.length === 0) {
-      setReservas([])
-      return
-    }
-
-    // 2) Enriquecer con studies y clients en paralelo (si falla un JOIN, las reservas se muestran igual)
-    const studyIds = [...new Set(reservasBase.map(r => r.study_id).filter(Boolean))]
-    const clientIds = [...new Set(reservasBase.map(r => r.client_id).filter(Boolean))]
-
-    const [studiesRes, clientsRes] = await Promise.all([
-      studyIds.length
-        ? supabase.from('studies').select('id, status, customer').in('id', studyIds)
-        : Promise.resolve({ data: [] }),
-      clientIds.length
-        ? supabase.from('clients').select('id, nombre, apellidos, email, dni').in('id', clientIds)
-        : Promise.resolve({ data: [] }),
-    ])
-
-    if (studiesRes.error) console.error('Error cargando studies:', studiesRes.error.message)
-    if (clientsRes.error) console.error('Error cargando clients:', clientsRes.error.message)
-
-    const studiesMap = Object.fromEntries((studiesRes.data || []).map(s => [s.id, s]))
-    const clientsMap = Object.fromEntries((clientsRes.data || []).map(c => [c.id, c]))
-
-    const enriquecidas = reservasBase.map(r => ({
-      ...r,
-      studies: r.study_id ? studiesMap[r.study_id] || null : null,
-      clients: r.client_id ? clientsMap[r.client_id] || null : null,
-    }))
-
-    setReservas(enriquecidas)
+    setReservasError('')
+    setReservas(res || [])
   }
 
-  async function actualizarPagoReserva(reservaId, nuevoEstado) {
-    const { error } = await supabase
-      .from('installation_reservations')
-      .update({ payment_status: nuevoEstado })
-      .eq('id', reservaId)
-    if (error) { console.error(error); return }
+  async function actualizarReserva(reserva, patch) {
+    const nextPaymentStatus = patch.payment_status ?? reserva.payment_status ?? 'pending'
+    const nextReservationStatus = patch.reservation_status
+      ?? paymentToReservationStatus(nextPaymentStatus, reserva.reservation_status)
+
+    const rpcResult = await supabase
+      .rpc('update_installation_reservation', {
+        p_reservation_id: reserva.id,
+        p_payment_status: nextPaymentStatus,
+        p_reservation_status: nextReservationStatus,
+      })
+
+    let error = rpcResult.error
+    if (error && isMissingRpcError(error)) {
+      ;({ error } = await supabase
+        .from('installation_reservations')
+        .update({
+          payment_status: nextPaymentStatus,
+          reservation_status: nextReservationStatus,
+        })
+        .eq('id', reserva.id))
+    }
+
+    if (error) {
+      console.error(error)
+      alert(mapSupabaseError(error, { entidad: 'reserva' }))
+      return
+    }
     await refrescarReservas()
+  }
+
+  async function actualizarPagoReserva(reserva, nuevoEstado) {
+    await actualizarReserva(reserva, { payment_status: nuevoEstado })
+  }
+
+  async function actualizarEstadoReserva(reserva, nuevoEstado) {
+    await actualizarReserva(reserva, { reservation_status: nuevoEstado })
   }
 
   function abrirPanel(participe) {
@@ -727,7 +740,11 @@ export default function DetalleProyecto() {
           <button className="btn btn-sm" onClick={() => navigate(`/estudios`)}>Ver estudios</button>
         </div>
 
-        {reservas.length === 0 ? (
+        {reservasError ? (
+          <div className="alert alert-danger" style={{ marginBottom: 12 }}>
+            {reservasError}
+          </div>
+        ) : reservas.length === 0 ? (
           <div style={{ padding: '20px 0', color: 'var(--text-muted)', fontSize: 13 }}>
             No hay reservas vinculadas a esta instalación
           </div>
@@ -760,7 +777,16 @@ export default function DetalleProyecto() {
                     confirmed:       ['Confirmado',      'pill-blue'],
                     released:        ['Liberado',        'pill-gray'],
                     cancelled:       ['Cancelado',       'pill-gray'],
+                    rejected:        ['Rechazado',       'pill-red'],
                   }[r.reservation_status] || [r.reservation_status || '—', 'pill-gray']
+                  const RESERVA_OPTS = [
+                    { value: 'pending_payment', label: 'Pendiente pago', color: 'pill-amber' },
+                    { value: 'paid',            label: 'Pagado',         color: 'pill-green' },
+                    { value: 'confirmed',       label: 'Confirmado',     color: 'pill-blue' },
+                    { value: 'released',        label: 'Liberado',       color: 'pill-gray' },
+                    { value: 'cancelled',       label: 'Cancelado',      color: 'pill-gray' },
+                    { value: 'rejected',        label: 'Rechazado',      color: 'pill-red' },
+                  ]
                   const PAY_OPTS = [
                     { value: 'pending',      label: 'Pendiente',       color: 'pill-amber' },
                     { value: 'signal_paid',  label: 'Reserva pagada',  color: 'pill-blue'  },
@@ -784,11 +810,26 @@ export default function DetalleProyecto() {
                         {email && <div className="td-muted">{email}</div>}
                       </td>
                       <td className="font-bold">{r.reserved_kwp} kWp</td>
-                      <td><span className={`pill ${rsLabel[1]}`}><span className="pill-dot" />{rsLabel[0]}</span></td>
+                      <td onClick={e => e.stopPropagation()}>
+                        <select
+                          value={r.reservation_status || 'pending_payment'}
+                          onChange={e => actualizarEstadoReserva(r, e.target.value)}
+                          className={`pill ${rsLabel[1]}`}
+                          style={{
+                            border: 'none', background: 'transparent', cursor: 'pointer',
+                            fontSize: 11, fontWeight: 500, padding: '2px 4px',
+                            appearance: 'auto', maxWidth: 150,
+                          }}
+                        >
+                          {RESERVA_OPTS.map(o => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </td>
                       <td onClick={e => e.stopPropagation()}>
                         <select
                           value={r.payment_status || 'pending'}
-                          onChange={e => actualizarPagoReserva(r.id, e.target.value)}
+                          onChange={e => actualizarPagoReserva(r, e.target.value)}
                           className={`pill ${payOpt.color}`}
                           style={{
                             border: 'none', background: 'transparent', cursor: 'pointer',

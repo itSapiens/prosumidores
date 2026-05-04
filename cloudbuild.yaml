@@ -1,29 +1,27 @@
 steps:
-  # 1. Build de la imagen Docker
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/instalaciones-acc:$COMMIT_SHA'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/instalaciones-acc:latest'
+      - 'gcr.io/$PROJECT_ID/prosumidores:latest'
+      - '--build-arg'
+      - 'VITE_SUPABASE_URL=${_VITE_SUPABASE_URL}'
+      - '--build-arg'
+      - 'VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
       - '.'
 
-  # 2. Push al Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - '--all-tags'
-      - 'gcr.io/$PROJECT_ID/instalaciones-acc'
+      - 'gcr.io/$PROJECT_ID/prosumidores:latest'
 
-  # 3. Deploy en Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'deploy'
-      - 'instalaciones-acc'
-      - '--image=gcr.io/$PROJECT_ID/instalaciones-acc:$COMMIT_SHA'
+      - 'prosumidores'
+      - '--image=gcr.io/$PROJECT_ID/prosumidores:latest'
       - '--region=europe-southwest1'
       - '--platform=managed'
       - '--allow-unauthenticated'
@@ -34,4 +32,4 @@ steps:
       - '--max-instances=3'
 
 images:
-  - 'gcr.io/$PROJECT_ID/instalaciones-acc'
+  - 'gcr.io/$PROJECT_ID/prosumidores:latest'
