@@ -19,6 +19,7 @@ scripts/reports/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+gdep
 
 # Editor
 .DS_Store
