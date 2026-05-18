@@ -2,6 +2,22 @@ import { useState } from 'react'
 import { supabaseAuth } from '../lib/supabase.js'
 import { mapSupabaseError } from '../lib/errors.js'
 
+function getRedirectUrl() {
+  if (import.meta.env.DEV) return `${window.location.origin}/dashboard`
+
+  const configuredUrl = import.meta.env.VITE_AUTH_REDIRECT_URL
+  if (configuredUrl) return configuredUrl
+  return `${window.location.origin}/dashboard`
+}
+
+function getRedirectHost(url) {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
 export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -9,10 +25,13 @@ export default function Login() {
   async function handleGoogleLogin() {
     setError('')
     setLoading(true)
-    const { error } = await supabaseAuth.auth.signInWithOAuth({
+    const redirectTo = getRedirectUrl()
+    const expectedHost = getRedirectHost(redirectTo)
+    const { data, error } = await supabaseAuth.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo,
+        skipBrowserRedirect: true,
         queryParams: {
           // hd = hosted domain: solo acepta cuentas de este dominio
           // (doble seguro: además de "Internal" en Google Cloud)
@@ -25,8 +44,24 @@ export default function Login() {
     if (error) {
       setError(mapSupabaseError(error))
       setLoading(false)
+      return
     }
-    // Si no hay error, Supabase redirige a Google y no volvemos aquí
+
+    const oauthUrl = data?.url
+    const decodedUrl = oauthUrl ? decodeURIComponent(oauthUrl) : ''
+    if (import.meta.env.DEV && expectedHost && decodedUrl && !decodedUrl.includes(expectedHost)) {
+      setError(`Supabase está devolviendo a otra URL. Revisa que ${redirectTo} esté permitido en Auth > URL Configuration > Redirect URLs.`)
+      setLoading(false)
+      return
+    }
+
+    if (oauthUrl) {
+      window.location.assign(oauthUrl)
+      return
+    }
+
+    setError('No se pudo iniciar el login con Google.')
+    setLoading(false)
   }
 
   return (

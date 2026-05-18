@@ -29,7 +29,7 @@ export default function Documentos() {
   const [alertas, setAlertas] = useState([])
 
   useEffect(() => {
-    supabase.from('installations').select('id, nombre_instalacion').eq('active', true)
+    supabase.from('installations').select('id, nombre_instalacion, empresa_id').eq('active', true)
       .then(({ data }) => setInstalaciones(data || []))
   }, [])
 
@@ -176,6 +176,7 @@ export default function Documentos() {
       for (const p of participes) {
         for (const tipo of tiposSeleccionados) {
           inserts.push({
+            empresa_id: instalacion?.empresa_id || empresa?.id,
             installation_id: installationId,
             client_id: p.client_id,
             tipo,
@@ -227,7 +228,7 @@ export default function Documentos() {
         const siguienteNum = ultimas?.[0] ? ultimas[0].version + 1 : 1
         const { data: nueva } = await supabase
           .from('acuerdo_versiones')
-          .insert({ installation_id: installationId, version: siguienteNum, estado: 'activo' })
+          .insert({ empresa_id: instalacion?.empresa_id || empresa?.id, installation_id: installationId, version: siguienteNum, estado: 'activo' })
           .select().single()
         version = nueva
         setVersionActiva(nueva)
@@ -259,6 +260,7 @@ export default function Documentos() {
           await supabase.from('documents').update({ estado: 'generado' }).eq('id', existing.id)
         } else {
           await supabase.from('documents').insert({
+            empresa_id: instalacion?.empresa_id || empresa?.id,
             installation_id: installationId,
             client_id: p.client_id,
             tipo: 'acuerdo_reparto',

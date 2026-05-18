@@ -148,6 +148,8 @@ export default function Plantillas() {
   async function handleGuardar() {
     if (!distSeleccionada) return
     setGuardando(true)
+    console.log("Entroando Guardando documento");
+    
 
     const tipo = tipoActivo
     const template = templates[tipo]
@@ -167,13 +169,16 @@ export default function Plantillas() {
       let data
       ;({ data, error } = await supabase.from('document_templates').insert(payload).select().single())
       if (!error && data) {
+        console.log("Error guardando poniendo tempalte anterior")
         setTemplates(prev => ({ ...prev, [tipo]: data }))
       }
     }
 
     setGuardando(false)
-    if (!error) { setGuardado(true); setTimeout(() => setGuardado(false), 2500) }
+    if (!error) { setGuardado(true); setTimeout(() => setGuardado(false), 2500)
+     }
     else alert(mapSupabaseError(error, { entidad: 'plantilla' }))
+
   }
 
   const templateActual = templates[tipoActivo]

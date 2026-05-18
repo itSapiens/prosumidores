@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { descargarDocumento } from '../utils/pdfGenerator.js'
 import { mapSupabaseError } from '../lib/errors.js'
+import { canCurrentUserDeleteStudies } from '../lib/studies.js'
 
 const ORIENT_LABEL = { sur:'Sur', sureste:'Sureste', suroeste:'Suroeste', este:'Este', oeste:'Oeste' }
 
@@ -17,6 +18,45 @@ function paymentToReservationStatus(paymentStatus, currentReservationStatus) {
   if (paymentStatus === 'signal_paid' || paymentStatus === 'paid') return 'paid'
   if (paymentStatus === 'pending' && currentReservationStatus === 'paid') return 'pending_payment'
   return currentReservationStatus || 'pending_payment'
+}
+
+function getGooglePreviewUrl(url) {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.replace(/^www\./, '')
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    const fileId = parts[2] || parsed.searchParams.get('id')
+
+    if (host === 'drive.google.com' && fileId) {
+      return `https://drive.google.com/file/d/${fileId}/preview`
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function getContractPreviewUrl(url) {
+  if (!url) return null
+  return getGooglePreviewUrl(url) || `${url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`
+}
+
+function isSignedContract(contract) {
+  if (!contract) return false
+  const status = String(contract.status || '').toLowerCase()
+  const hasFile = Boolean(
+    contract.contract_drive_url
+    || contract.contract_supabase_path
+    || contract.supabase_folder_path
+  )
+  return ['signed', 'confirmed'].includes(status) && hasFile
+}
+
+function isVisibleReservation(reserva) {
+  const reservationStatus = String(reserva?.reservation_status || '').toLowerCase()
+  const studyStatus = String(reserva?.studies?.status || '').toLowerCase()
+  return !['cancelled', 'released'].includes(reservationStatus) && studyStatus !== 'cancelled'
 }
 
 export default function DetalleProyecto() {
@@ -40,6 +80,9 @@ export default function DetalleProyecto() {
   const [versionesHistorial, setVersionesHistorial] = useState([])
   const [cerrandoVersion, setCerrandoVersion] = useState(false)
   const [versionDetalle, setVersionDetalle] = useState(null) // versión abierta en modal de consulta
+  const [contractPreview, setContractPreview] = useState(null)
+  const [canDeleteStudies, setCanDeleteStudies] = useState(false)
+  const [deletingReservationId, setDeletingReservationId] = useState(null)
 
   useEffect(() => { cargarDatos() }, [id])
 
@@ -52,6 +95,11 @@ export default function DetalleProyecto() {
 
   async function cargarDatos() {
     setLoading(true)
+    const permissionResult = await canCurrentUserDeleteStudies()
+    if (permissionResult.error) {
+      console.error('delete studies permission error:', permissionResult.error.message || permissionResult.error)
+    }
+    setCanDeleteStudies(Boolean(permissionResult.data))
     // En v2 cada instalación pertenece a una empresa (multi-tenant). Cargamos
     // la empresa titular embebida en la propia query para que los documentos
     // se generen con SUS datos legales (no los de una empresa global).
@@ -157,6 +205,7 @@ export default function DetalleProyecto() {
       }).eq('id', existing.id)
     } else {
       await supabase.from('documents').insert({
+        empresa_id: instalacion?.empresa_id || empresa?.id,
         installation_id: id, client_id: clientId, tipo, estado: nuevoEstado,
         firmado_en: nuevoEstado === 'firmado' ? new Date().toISOString() : null,
         ...(versionNum ? { version_acuerdo: versionNum } : {})
@@ -226,7 +275,7 @@ export default function DetalleProyecto() {
     const siguienteNum = (versionActiva?.version || versionesHistorial.at(-1)?.version || 0) + 1
     if (!confirm(`¿Iniciar la versión ${siguienteNum} del Acuerdo de Reparto? A partir de ahora podrás modificar partícipes y coeficientes libremente hasta cerrar esta nueva versión.`)) return
     const { data: nueva } = await supabase.from('acuerdo_versiones')
-      .insert({ installation_id: id, version: siguienteNum, estado: 'activo' })
+      .insert({ empresa_id: instalacion?.empresa_id || empresa?.id, installation_id: id, version: siguienteNum, estado: 'activo' })
       .select().single()
     setVersionActiva(nueva)
     await cargarParticipes(nueva)
@@ -282,6 +331,7 @@ export default function DetalleProyecto() {
           .eq('id', existente.id))
       } else {
         ;({ error } = await supabase.from('participes').insert({
+          empresa_id: reserva.empresa_id || instalacion?.empresa_id || empresa?.id,
           installation_id: id,
           client_id: reserva.client_id,
           coeficiente_reparto: coef,
@@ -308,11 +358,13 @@ export default function DetalleProyecto() {
       console.error('Error cargando reservas:', error.message)
       setReservasError(mapSupabaseError(error, { entidad: 'reserva' }) || error.message)
       setReservas([])
-      return
+      return { data: [], error }
     }
 
+    const visibleReservations = (res || []).filter(isVisibleReservation)
     setReservasError('')
-    setReservas(res || [])
+    setReservas(visibleReservations)
+    return { data: visibleReservations, error: null }
   }
 
   async function actualizarReserva(reserva, patch) {
@@ -352,6 +404,133 @@ export default function DetalleProyecto() {
 
   async function actualizarEstadoReserva(reserva, nuevoEstado) {
     await actualizarReserva(reserva, { reservation_status: nuevoEstado })
+  }
+
+  async function findContractPath(contract, bucket) {
+    if (contract.contract_supabase_path) return contract.contract_supabase_path
+
+    const folder = contract.supabase_folder_path
+    if (!bucket || !folder) return null
+
+    const { data, error } = await supabase.storage.from(bucket).list(folder, { limit: 50 })
+    if (error) throw error
+
+    const match = (data || []).find(entry => {
+      const name = String(entry.name || '').toLowerCase()
+      return name.includes('contrato-firmado') || name.includes('contrato') || name.includes('contract')
+    })
+
+    return match?.name ? `${folder}/${match.name}` : null
+  }
+
+  async function abrirPreviewContrato(reserva) {
+    const contract = reserva.contracts
+    if (!isSignedContract(contract)) return
+
+    setContractPreview({
+      loading: true,
+      title: 'Contrato firmado',
+      subtitle: reserva.clients?.email || reserva.studies?.customer?.email || '',
+      url: '',
+      previewUrl: '',
+      error: '',
+    })
+
+    try {
+      if (contract.contract_drive_url) {
+        setContractPreview(prev => ({
+          ...prev,
+          loading: false,
+          url: contract.contract_drive_url,
+          previewUrl: getContractPreviewUrl(contract.contract_drive_url),
+        }))
+        return
+      }
+
+      const bucket = contract.contract_supabase_bucket || 'generador-propuestas-documentos'
+      const path = await findContractPath(contract, bucket)
+      if (!path) throw new Error('No se encontró el PDF del contrato firmado en Storage.')
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, 60 * 60)
+
+      if (error) throw error
+
+      const signedUrl = data?.signedUrl
+      setContractPreview(prev => ({
+        ...prev,
+        loading: false,
+        url: signedUrl,
+        previewUrl: getContractPreviewUrl(signedUrl),
+      }))
+    } catch (error) {
+      console.error('contract preview error:', error)
+      setContractPreview(prev => ({
+        ...prev,
+        loading: false,
+        error: error.message || 'No se pudo abrir el contrato firmado.',
+      }))
+    }
+  }
+
+  async function eliminarEstudioReserva(reserva) {
+    if (!reserva.id) return
+
+    const cl = reserva.clients || {}
+    const cust = reserva.studies?.customer || {}
+    const nombre = [cl.nombre || cust.nombre, cl.apellidos || cust.apellidos].filter(Boolean).join(' ') || 'esta reserva'
+    if (!confirm(`¿Eliminar la reserva de ${nombre}? Se ocultará de esta instalación y liberará los kWp reservados.`)) return
+
+    setDeletingReservationId(reserva.id)
+    try {
+      const rpcResult = await supabase
+        .rpc('delete_installation_reservation_admin', {
+          p_reservation_id: reserva.id,
+        })
+
+      let error = rpcResult.error
+      if (error && isMissingRpcError(error)) {
+        const fallbackResult = await supabase
+          .rpc('update_installation_reservation', {
+            p_reservation_id: reserva.id,
+            p_payment_status: reserva.payment_status || 'pending',
+            p_reservation_status: 'cancelled',
+          })
+
+        error = fallbackResult.error
+        if (error && isMissingRpcError(error)) {
+          const directResult = await supabase
+            .from('installation_reservations')
+            .update({
+              reservation_status: 'cancelled',
+              release_reason: 'Eliminada desde backoffice',
+            })
+            .eq('id', reserva.id)
+            .select('id')
+            .maybeSingle()
+
+          error = directResult.error
+          if (!error && !directResult.data) {
+            error = { message: 'No se pudo eliminar la reserva. No se actualizó ningún registro.' }
+          }
+        }
+      }
+
+      if (error) {
+        console.error('delete reservation error:', error)
+        alert(mapSupabaseError(error, { entidad: 'reserva' }))
+        return
+      }
+
+      setReservas(prev => prev.filter(item => item.id !== reserva.id))
+      const refreshResult = await refrescarReservas()
+      if (!refreshResult?.error && refreshResult.data.some(item => item.id === reserva.id)) {
+        alert('No se pudo ocultar la reserva. Revisa que la migración 031 esté aplicada en Supabase.')
+      }
+    } finally {
+      setDeletingReservationId(null)
+    }
   }
 
   function abrirPanel(participe) {
@@ -798,6 +977,7 @@ export default function DetalleProyecto() {
                   const esParticipe = r.client_id
                     ? participes.some(p => p.client_id === r.client_id)
                     : false
+                  const hasContractPreview = isSignedContract(r.contracts)
 
                   return (
                     <tr key={r.id}>
@@ -864,6 +1044,20 @@ export default function DetalleProyecto() {
                               Ver estudio
                             </button>
                           )}
+                          {canDeleteStudies && (
+                            <button
+                              className="btn btn-sm btn-danger"
+                              onClick={() => eliminarEstudioReserva(r)}
+                              disabled={deletingReservationId === r.id}
+                            >
+                              {deletingReservationId === r.id ? 'Eliminando...' : 'Eliminar'}
+                            </button>
+                          )}
+                          {hasContractPreview && (
+                            <button className="btn btn-sm" onClick={() => abrirPreviewContrato(r)}>
+                              Preview contrato
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -871,6 +1065,59 @@ export default function DetalleProyecto() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {contractPreview && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 80,
+              background: 'rgba(0,0,0,.42)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 24,
+            }}
+          >
+            <div className="card" style={{ width: 'min(1100px, 96vw)', height: 'min(780px, 88vh)', display: 'flex', flexDirection: 'column', padding: 0 }}>
+              <div className="card-header" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <div className="card-title">{contractPreview.title}</div>
+                  {contractPreview.subtitle && <div className="page-sub">{contractPreview.subtitle}</div>}
+                </div>
+                <div className="flex-row gap-8">
+                  {contractPreview.url && (
+                    <a href={contractPreview.url} target="_blank" rel="noopener noreferrer" className="btn btn-sm">
+                      Abrir original
+                    </a>
+                  )}
+                  <button className="btn btn-sm btn-ghost" onClick={() => setContractPreview(null)}>
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, background: 'var(--bg)' }}>
+                {contractPreview.loading ? (
+                  <div className="loading" style={{ height: '100%' }}><div className="spinner" />Cargando contrato...</div>
+                ) : contractPreview.error ? (
+                  <div className="empty-state" style={{ height: '100%' }}>
+                    <div className="empty-title">Preview no disponible</div>
+                    <div className="empty-sub">{contractPreview.error}</div>
+                  </div>
+                ) : (
+                  <iframe
+                    title="preview-contrato-firmado"
+                    src={contractPreview.previewUrl}
+                    style={{ width: '100%', height: '100%', border: 0 }}
+                  />
+                )}
+              </div>
+            </div>
           </div>
         )}
 

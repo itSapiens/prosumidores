@@ -1,0 +1,27 @@
+
+> prosumidores@1.0.0 dev
+> vite --host 127.0.0.1
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m240[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[2m13:59:33[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:00:14[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:00:56[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:01:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:02:21[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:02:26[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:02:59[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:03:16[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:04:19[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m14:04:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Plantillas.jsx[22m
+[2m12:27:11[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/NuevoProyecto.jsx, /src/pages/Importar.jsx, /src/pages/Documentos.jsx, /src/pages/DetalleProyecto.jsx[22m
+[2m12:27:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/NuevoProyecto.jsx[22m
+[2m12:29:21[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/InstallationMap.jsx[22m
+[2m12:29:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css[22m
+[2m12:30:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Usuarios.jsx[22m
+[2m12:30:35[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css[22m
+[2m12:32:29[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/InstallationMap.jsx[22m
+[2m12:32:29[22m [36m[1m[vite][22m[39m [33mhmr invalidate [39m[2m/src/components/InstallationMap.jsx[22m Could not Fast Refresh ("getInstallationPosition" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m12:32:29[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/MapaInstalaciones.jsx, /src/pages/NuevoProyecto.jsx[22m

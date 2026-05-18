@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  CONTRACT_STATUS_LABELS,
   PAYMENT_STATUS_LABELS,
+  PROPOSAL_MODE_LABELS,
   RESERVATION_STATUS_LABELS,
   STUDY_STATUS_LABELS,
   formatNumber,
@@ -69,6 +71,59 @@ function SectionTabs({ value, onChange, items }) {
   )
 }
 
+function RelatedStudiesPanel({ study, relatedStudies = [], onOpenStudy }) {
+  const others = relatedStudies
+    .filter(item => item?.id && item.id !== study?.id)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+
+  return (
+    <div className="card card-sm">
+      <div className="card-title mb-8">
+        Estudios relacionados
+        <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-muted)', marginLeft: 8 }}>
+          ({others.length})
+        </span>
+      </div>
+      {others.length === 0 ? (
+        <div className="text-muted" style={{ padding: '4px 0' }}>
+          No hay otros estudios vinculados a este cliente.
+        </div>
+      ) : (
+        <div className="related-study-list">
+          {others.map((item, index) => {
+            const cups = getStudyCups(item)
+            const power = getStudyRecommendedPower(item)
+            const date = item.created_at ? new Date(item.created_at).toLocaleString('es-ES', {
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+            }) : 'Sin fecha'
+
+            return (
+              <button
+                key={item.id}
+                className="related-study-item"
+                onClick={() => onOpenStudy?.(item.id)}
+              >
+                <div>
+                  <div className="related-study-title">Estudio {String(index + 1).padStart(2, '0')} · {date}</div>
+                  <div className="related-study-meta">
+                    {cups ? <span className="text-mono">{cups}</span> : <span>Sin CUPS</span>}
+                    {power != null && <span>{formatNumber(power, { maximumFractionDigits: 2 })} kWp</span>}
+                  </div>
+                </div>
+                <span className="related-study-action">Abrir</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PreviewPanel({ study, compact = false }) {
   const seedDocuments = useMemo(() => getStudyDocuments(study), [study])
   const [documents, setDocuments] = useState(seedDocuments)
@@ -80,7 +135,7 @@ function PreviewPanel({ study, compact = false }) {
 
     async function loadDocuments() {
       setDocuments(seedDocuments)
-      setLoading(seedDocuments.some(doc => !doc.url && doc.bucket && doc.path))
+      setLoading(seedDocuments.some(doc => !doc.url && doc.bucket))
 
       const resolved = await resolveStudyDocuments(study)
       if (!cancelled) {
@@ -199,9 +254,13 @@ function PreviewPanel({ study, compact = false }) {
 export default function StudyDetailView({
   study,
   reservations = [],
+  contract = null,
+  installation = null,
   compact = false,
+  relatedStudies = [],
   onOpenInstallation,
   onOpenFullPage,
+  onOpenStudy,
 }) {
   const [compactTab, setCompactTab] = useState('preview')
   const calc = getStudyCalculation(study)
@@ -220,7 +279,14 @@ export default function StudyDetailView({
   const annualSavings = getStudyAnnualSavings(study)
   const monthlySavings = getStudyMonthlySavings(study)
   const viabilityScore = getStudyViabilityScore(study)
-  const installationName = getStudyAssignedInstallationName(study)
+  const installationName = getStudyAssignedInstallationName(study, installation, reservations, contract)
+  const mainReservation = reservations[0] || null
+  const assignedInstallationId = study.selected_installation_id
+    || mainReservation?.installation_id
+    || contract?.installation_id
+    || installation?.id
+  const signedAt = contract?.signed_at || contract?.confirmed_at
+  const hasSignedContract = ['signed', 'confirmed'].includes(String(contract?.status || '').toLowerCase()) || Boolean(signedAt)
 
   useEffect(() => {
     setCompactTab('preview')
@@ -261,6 +327,48 @@ export default function StudyDetailView({
             />
           )
         })}
+      </div>
+    </div>
+  )
+
+  const estadoComercialPanel = (
+    <div className="card card-sm">
+      <div className="card-title mb-8">Estado comercial</div>
+      <div className="detail-grid">
+        <DetailRow
+          label="Firma contrato"
+          value={contract
+            ? <Pill status={hasSignedContract ? 'signed' : contract.status} map={CONTRACT_STATUS_LABELS} />
+            : <span className="text-muted">Sin contrato</span>}
+        />
+        <DetailRow
+          label="Modalidad seleccionada"
+          value={contract?.proposal_mode
+            ? <Pill status={contract.proposal_mode} map={PROPOSAL_MODE_LABELS} />
+            : null}
+        />
+        <DetailRow
+          label="Pago"
+          value={mainReservation?.payment_status
+            ? <Pill status={mainReservation.payment_status} map={PAYMENT_STATUS_LABELS} />
+            : null}
+        />
+        <DetailRow
+          label="Reserva"
+          value={mainReservation?.reservation_status
+            ? <Pill status={mainReservation.reservation_status} map={RESERVATION_STATUS_LABELS} />
+            : null}
+        />
+        <DetailRow label="Nº contrato" value={contract?.contract_number || null} mono />
+        <DetailRow label="Fecha firma" value={signedAt ? new Date(signedAt).toLocaleDateString('es-ES') : null} />
+        <DetailRow
+          label="kWp reservados"
+          value={mainReservation?.reserved_kwp != null ? `${formatNumber(mainReservation.reserved_kwp)} kWp` : null}
+        />
+        <DetailRow
+          label="Plazo pago"
+          value={mainReservation?.payment_deadline_at ? new Date(mainReservation.payment_deadline_at).toLocaleDateString('es-ES') : null}
+        />
       </div>
     </div>
   )
@@ -330,11 +438,11 @@ export default function StudyDetailView({
         <div>
           <div className="card-title">Instalación asignada</div>
           <div className="page-sub">
-            {installationName || 'Este estudio aun no se ha vinculado a una instalación concreta.'}
+            {installationName || 'No se ha podido resolver la instalación vinculada.'}
           </div>
         </div>
-        {study.selected_installation_id && onOpenInstallation && (
-          <button className="btn btn-sm" onClick={() => onOpenInstallation(study.selected_installation_id)}>
+        {assignedInstallationId && onOpenInstallation && (
+          <button className="btn btn-sm" onClick={() => onOpenInstallation(assignedInstallationId)}>
             Ver instalación
           </button>
         )}
@@ -342,15 +450,18 @@ export default function StudyDetailView({
       <div className="detail-grid">
         <DetailRow label="Nombre" value={installationName} />
         <DetailRow
-          label="Potencia snapshot"
+          label="Potencia instalada"
           value={
-            study.selected_installation_snapshot?.potencia_instalada_kwp != null
-              ? `${formatNumber(study.selected_installation_snapshot.potencia_instalada_kwp)} kWp`
+            (study.selected_installation_snapshot?.potencia_instalada_kwp ?? installation?.potencia_instalada_kwp) != null
+              ? `${formatNumber(study.selected_installation_snapshot?.potencia_instalada_kwp ?? installation?.potencia_instalada_kwp)} kWp`
               : null
           }
         />
-        <DetailRow label="Dirección" value={study.selected_installation_snapshot?.direccion || null} />
-        <DetailRow label="kWp asignados" value={study.assigned_kwp != null ? `${formatNumber(study.assigned_kwp)} kWp` : null} />
+        <DetailRow label="Distribuidora" value={installation?.distribuidoras?.nombre || null} />
+        <DetailRow label="Dirección" value={study.selected_installation_snapshot?.direccion || installation?.direccion || null} />
+        <DetailRow label="Municipio" value={installation?.municipio || null} />
+        <DetailRow label="CAU generación" value={installation?.cups_generador || null} mono />
+        <DetailRow label="kWp asignados" value={(study.assigned_kwp ?? mainReservation?.reserved_kwp) != null ? `${formatNumber(study.assigned_kwp ?? mainReservation?.reserved_kwp)} kWp` : null} />
       </div>
     </div>
   )
@@ -396,14 +507,24 @@ export default function StudyDetailView({
     </div>
   )
 
+  const relatedStudiesPanel = (
+    <RelatedStudiesPanel
+      study={study}
+      relatedStudies={relatedStudies}
+      onOpenStudy={onOpenStudy}
+    />
+  )
+
   if (compact) {
     const compactPanels = {
       preview: <PreviewPanel study={study} compact />,
+      estado: estadoComercialPanel,
       cliente: clientePanel,
       factura: facturaPanel,
       calculo: calculoPanel,
       instalacion: instalacionPanel,
       reservas: reservasPanel,
+      relacionados: relatedStudiesPanel,
     }
 
     return (
@@ -443,11 +564,13 @@ export default function StudyDetailView({
           onChange={setCompactTab}
           items={[
             { id: 'preview', label: 'Preview' },
+            { id: 'estado', label: 'Estado' },
             { id: 'cliente', label: 'Cliente' },
             { id: 'factura', label: 'Factura' },
             { id: 'calculo', label: 'Cálculo' },
             { id: 'instalacion', label: 'Instalación' },
             { id: 'reservas', label: 'Reservas' },
+            { id: 'relacionados', label: 'Relacionados' },
           ]}
         />
 
@@ -501,15 +624,20 @@ export default function StudyDetailView({
         </div>
 
         <div className="two-col mb-16">
+          {estadoComercialPanel}
+          {instalacionPanel}
+        </div>
+
+        <div className="two-col mb-16">
           {clientePanel}
           {facturaPanel}
         </div>
 
         <div className="mb-16">{calculoPanel}</div>
 
-        <div className="mb-16">{instalacionPanel}</div>
-
         {reservasPanel}
+
+        <div className="mt-16">{relatedStudiesPanel}</div>
       </div>
 
       <div className="study-detail-side">

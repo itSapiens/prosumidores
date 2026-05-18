@@ -28,7 +28,30 @@ export const PAYMENT_STATUS_LABELS = {
   refunded:    { label: 'Devuelto',       color: 'pill-gray' },
 }
 
+export const CONTRACT_STATUS_LABELS = {
+  generated: { label: 'Generado',   color: 'pill-amber' },
+  uploaded:  { label: 'Subido',     color: 'pill-blue' },
+  signed:    { label: 'Firmado',    color: 'pill-green' },
+  confirmed: { label: 'Confirmado', color: 'pill-green' },
+  cancelled: { label: 'Cancelado',  color: 'pill-gray' },
+}
+
+export const PROPOSAL_MODE_LABELS = {
+  investment: { label: 'Inversión', color: 'pill-blue' },
+  service:    { label: 'Servicio',  color: 'pill-green' },
+}
+
 const STUDY_SELECT = '*'
+const SAPIENS_STUDY_ADMIN_EMAILS = new Set([
+  'juan@sapiensenergia.es',
+  'tecnicoit01@sapiensenergia.es',
+  'carlos@sapiensenergia.es',
+  'it@sapiensenergia.es',
+])
+
+export function isConfiguredStudyAdminEmail(email) {
+  return SAPIENS_STUDY_ADMIN_EMAILS.has(String(email || '').trim().toLowerCase())
+}
 
 function isPresent(value) {
   return value !== null && value !== undefined && value !== ''
@@ -143,12 +166,23 @@ function getParentFolder(path) {
   return parts.slice(0, -1).join('/')
 }
 
+function getPathFilename(path) {
+  const text = normalizeText(path)
+  if (!text) return null
+  const parts = text.split('/').filter(Boolean)
+  return parts[parts.length - 1] || null
+}
+
 function getStudyStorageFolder(study, source) {
   return normalizeText(
     pick(
-      study?.supabase_folder_path,
       source.supabase_folder_path,
       source.folder_path,
+      getParentFolder(source.factura_supabase_path),
+      getParentFolder(source.invoice_supabase_path),
+      getParentFolder(source.propuesta_supabase_path),
+      getParentFolder(source.proposal_supabase_path),
+      study?.supabase_folder_path,
       getParentFolder(study?.factura_supabase_path),
       getParentFolder(study?.propuesta_supabase_path)
     )
@@ -200,7 +234,157 @@ function getDocumentSearchTokens(key) {
   return []
 }
 
-async function resolveStorageDocument(document, folderPath) {
+function parseStorageTimestamp(value) {
+  const text = normalizeText(value)
+  if (!text) return null
+  const match = text.match(/(?:^|[-_/])(\d{8})T?(\d{6})(\d{0,3})Z?/i)
+  if (!match) return null
+
+  const [, date, time, millis = ''] = match
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(4, 6)) - 1
+  const day = Number(date.slice(6, 8))
+  const hour = Number(time.slice(0, 2))
+  const minute = Number(time.slice(2, 4))
+  const second = Number(time.slice(4, 6))
+  const ms = Number(millis.padEnd(3, '0') || 0)
+  const valueMs = Date.UTC(year, month, day, hour, minute, second, ms)
+  return Number.isFinite(valueMs) ? valueMs : null
+}
+
+function parseDateMs(value) {
+  const text = normalizeText(value)
+  if (!text) return null
+  const ms = Date.parse(text)
+  return Number.isFinite(ms) ? ms : null
+}
+
+function getStudyReferenceDateMs(study) {
+  const source = asObject(study?.source_file)
+  return parseDateMs(pick(
+    source.created_at,
+    source.createdAt,
+    source.uploaded_at,
+    source.uploadedAt,
+    source.timestamp,
+    source.generated_at,
+    study?.created_at,
+    study?.updated_at
+  ))
+}
+
+function getEntryDateMs(entry) {
+  return parseStorageTimestamp(entry?.name)
+    || parseDateMs(entry?.created_at)
+    || parseDateMs(entry?.updated_at)
+    || parseDateMs(entry?.last_accessed_at)
+}
+
+function getStudyIdentifierTokens(study) {
+  const source = asObject(study?.source_file)
+  return [
+    study?.id,
+    study?.id ? String(study.id).slice(0, 8) : null,
+    study?.id ? String(study.id).slice(0, 12) : null,
+    source.study_id,
+    source.studyId,
+    source.upload_id,
+    source.uploadId,
+    source.file_id,
+    source.fileId,
+    source.document_set_id,
+  ]
+    .map(value => normalizeText(value)?.toLowerCase())
+    .filter(value => value && value.length >= 8)
+}
+
+function normalizeStoredDocumentEntry(entry, fallbackKey = null) {
+  const document = asObject(entry)
+  const type = normalizeText(document.type || document.key || fallbackKey)
+  const normalizedType = type === 'invoice'
+    ? 'invoice'
+    : type === 'proposal'
+      ? 'proposal'
+      : type === 'signed_contract' || type === 'contract'
+        ? 'contract'
+        : fallbackKey
+
+  if (!normalizedType) return null
+
+  return {
+    key: normalizedType,
+    label: normalizedType === 'invoice'
+      ? 'Factura'
+      : normalizedType === 'proposal'
+        ? 'Propuesta'
+        : 'Contrato firmado',
+    bucket: document.bucket,
+    path: document.path,
+    mimeType: document.mime_type || document.mimeType,
+    filename: document.file_name || document.fileName || document.original_name || document.originalName,
+    uploadedAt: document.uploaded_at || document.uploadedAt,
+  }
+}
+
+function getDocumentFilenameTokens(document) {
+  return [
+    document?.filename,
+    getPathFilename(document?.path),
+  ]
+    .map(value => normalizeText(value)?.toLowerCase())
+    .filter(value => value && value !== 'documento')
+}
+
+function scoreStorageEntry(entry, document, study) {
+  const name = normalizeText(entry?.name)
+  if (!name) return { score: -1, dateDiff: Number.POSITIVE_INFINITY }
+
+  const lowerName = name.toLowerCase()
+  const searchTokens = getDocumentSearchTokens(document.key)
+  const matchesDocumentKind = searchTokens.some(token => lowerName.includes(token))
+  const filenameTokens = getDocumentFilenameTokens(document)
+  const identifierTokens = getStudyIdentifierTokens(study)
+  const entryDateMs = getEntryDateMs(entry)
+  const studyDateMs = getStudyReferenceDateMs(study)
+  const dateDiff = entryDateMs && studyDateMs ? Math.abs(entryDateMs - studyDateMs) : Number.POSITIVE_INFINITY
+
+  let score = 0
+  if (matchesDocumentKind) score += 100
+  if (filenameTokens.some(token => lowerName === token || lowerName.endsWith(`/${token}`))) score += 1000
+  if (filenameTokens.some(token => token.length >= 8 && lowerName.includes(token))) score += 300
+  if (identifierTokens.some(token => lowerName.includes(token))) score += 700
+
+  if (Number.isFinite(dateDiff)) {
+    const minutes = dateDiff / 60000
+    if (minutes <= 2) score += 300
+    else if (minutes <= 10) score += 220
+    else if (minutes <= 60) score += 160
+    else if (minutes <= 24 * 60) score += 90
+    else if (minutes <= 7 * 24 * 60) score += 25
+  }
+
+  return { score, dateDiff }
+}
+
+function pickBestStorageEntry(entries, document, study) {
+  const compatible = (entries || []).filter(entry => {
+    const extension = getFileExtension(entry?.name)
+    return entry?.name && ['pdf', 'jpg', 'jpeg', 'png', 'webp'].includes(extension)
+  })
+  const tokens = getDocumentSearchTokens(document.key)
+  const typed = compatible.filter(entry => {
+    const name = (entry.name || '').toLowerCase()
+    return tokens.some(token => name.includes(token))
+  })
+  const candidates = typed.length > 0 ? typed : compatible
+
+  return candidates
+    .map(entry => ({ entry, ...scoreStorageEntry(entry, document, study) }))
+    .sort((a, b) => b.score - a.score || a.dateDiff - b.dateDiff || String(a.entry.name).localeCompare(String(b.entry.name)))
+    [0]?.entry || null
+}
+
+async function resolveStorageDocument(document, folderPath, study) {
   if (!document.bucket) return { ...document, error: 'Bucket de almacenamiento no disponible.' }
 
   const signExactPath = async path => {
@@ -238,11 +422,7 @@ async function resolveStorageDocument(document, folderPath) {
     return { ...document, error: listError.message || 'No se pudo listar la carpeta del cliente.' }
   }
 
-  const tokens = getDocumentSearchTokens(document.key)
-  const candidate = (entries || []).find(entry => {
-    const name = (entry.name || '').toLowerCase()
-    return tokens.some(token => name.includes(token))
-  }) || (entries || []).find(entry => entry.name && ['pdf', 'jpg', 'jpeg', 'png', 'webp'].includes(getFileExtension(entry.name)))
+  const candidate = pickBestStorageEntry(entries, document, study)
 
   if (!candidate?.name) {
     return { ...document, error: 'No se encontró ningún archivo compatible en la carpeta del cliente.' }
@@ -276,13 +456,40 @@ async function discoverStudyStorageFolder(study, source, bucket) {
 
   if (error) return null
 
-  const folders = (entries || []).map(entry => entry.name).filter(Boolean)
-  const match = folders.find(name => {
-    const normalized = slugify(name)
-    return slugCandidates.some(candidate => normalized === candidate || normalized.startsWith(`${candidate}-`))
-  })
+  const referenceDateMs = getStudyReferenceDateMs(study)
+  const identifiers = getStudyIdentifierTokens(study)
+  const matches = (entries || [])
+    .filter(entry => entry?.name)
+    .map(entry => {
+      const name = entry.name
+      const normalized = slugify(name)
+      const slugScore = slugCandidates.reduce((best, candidate) => {
+        if (normalized === candidate) return Math.max(best, 120)
+        if (normalized.startsWith(`${candidate}-`)) return Math.max(best, 100)
+        return best
+      }, 0)
 
-  return match ? `${rootFolder}/${match}` : null
+      if (!slugScore) return null
+
+      const lowerName = name.toLowerCase()
+      const entryDateMs = getEntryDateMs(entry)
+      const dateDiff = entryDateMs && referenceDateMs ? Math.abs(entryDateMs - referenceDateMs) : Number.POSITIVE_INFINITY
+      let score = slugScore
+      if (identifiers.some(token => lowerName.includes(token))) score += 700
+      if (Number.isFinite(dateDiff)) {
+        const minutes = dateDiff / 60000
+        if (minutes <= 2) score += 300
+        else if (minutes <= 10) score += 220
+        else if (minutes <= 60) score += 160
+        else if (minutes <= 24 * 60) score += 90
+      }
+
+      return { name, score, dateDiff }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || a.dateDiff - b.dateDiff || a.name.localeCompare(b.name))
+
+  return matches[0]?.name ? `${rootFolder}/${matches[0].name}` : null
 }
 
 function buildDocuments(study, contract = null) {
@@ -295,7 +502,8 @@ function buildDocuments(study, contract = null) {
     const cleanUrl = normalizeText(url)
     const cleanBucket = normalizeText(bucket)
     const cleanPath = normalizeText(path)
-    const uniqueId = cleanUrl || `${cleanBucket || ''}:${cleanPath || ''}`
+    if (!cleanUrl && !cleanBucket && !cleanPath) return
+    const uniqueId = cleanUrl || `${key}:${cleanBucket || ''}:${cleanPath || ''}`
     if (!uniqueId || seen.has(uniqueId)) return
     seen.add(uniqueId)
 
@@ -312,12 +520,66 @@ function buildDocuments(study, contract = null) {
   }
 
   const defaultBucket = pick(
-    study?.documentos_supabase_bucket,
-    study?.supabase_bucket,
     source.documentos_supabase_bucket,
     source.supabase_bucket,
-    source.bucket
+    source.bucket,
+    study?.documentos_supabase_bucket,
+    study?.supabase_bucket
   )
+
+  const storedDocuments = Array.isArray(source.documents) ? source.documents : []
+  storedDocuments
+    .map(entry => normalizeStoredDocumentEntry(entry))
+    .filter(Boolean)
+    .forEach(document => {
+      addDocument({
+        key: document.key,
+        label: document.label,
+        bucket: pick(document.bucket, defaultBucket),
+        path: document.path,
+        mimeType: document.mimeType,
+        filename: document.filename,
+      })
+    })
+
+  const invoiceDocument = normalizeStoredDocumentEntry(source.invoice, 'invoice')
+  if (invoiceDocument) {
+    addDocument({
+      key: 'invoice',
+      label: 'Factura',
+      bucket: pick(invoiceDocument.bucket, defaultBucket),
+      path: invoiceDocument.path,
+      mimeType: invoiceDocument.mimeType,
+      filename: invoiceDocument.filename,
+    })
+  }
+
+  const proposalDocument = normalizeStoredDocumentEntry(source.proposal, 'proposal')
+  if (proposalDocument) {
+    addDocument({
+      key: 'proposal',
+      label: 'Propuesta',
+      bucket: pick(proposalDocument.bucket, defaultBucket),
+      path: proposalDocument.path,
+      mimeType: proposalDocument.mimeType,
+      filename: proposalDocument.filename,
+    })
+  }
+
+  const signedContractDocument = normalizeStoredDocumentEntry(
+    contractData.metadata?.signed_contract || contractData.signed_contract || source.signed_contract,
+    'contract'
+  )
+  if (signedContractDocument) {
+    addDocument({
+      key: 'contract',
+      label: 'Contrato firmado',
+      bucket: pick(signedContractDocument.bucket, contractData.contract_supabase_bucket, defaultBucket),
+      path: signedContractDocument.path,
+      mimeType: signedContractDocument.mimeType,
+      filename: signedContractDocument.filename,
+    })
+  }
 
   addDocument({
     key: 'proposal',
@@ -325,11 +587,11 @@ function buildDocuments(study, contract = null) {
     url: pick(source.proposal_drive_url, source.proposal_url, source.proposalUrl),
     bucket: pick(source.propuesta_supabase_bucket, source.proposal_supabase_bucket, defaultBucket),
     path: pick(
-      study?.propuesta_supabase_path,
       source.propuesta_supabase_path,
       source.proposal_supabase_path,
       source.propuesta_path,
-      source.proposal_path
+      source.proposal_path,
+      study?.propuesta_supabase_path
     ),
     mimeType: pick(source.proposal_mime_type, source.proposalMimeType, source.proposal_type),
     filename: pick(source.proposal_filename, source.proposalFilename, source.proposal_name),
@@ -341,11 +603,11 @@ function buildDocuments(study, contract = null) {
     url: pick(source.invoice_drive_url, source.invoice_url, source.invoiceUrl, source.drive_url, source.url),
     bucket: pick(source.factura_supabase_bucket, source.invoice_supabase_bucket, defaultBucket),
     path: pick(
-      study?.factura_supabase_path,
       source.factura_supabase_path,
       source.invoice_supabase_path,
       source.factura_path,
-      source.invoice_path
+      source.invoice_path,
+      study?.factura_supabase_path
     ),
     mimeType: pick(source.invoice_mime_type, source.invoiceMimeType, source.mime_type, source.mimetype),
     filename: pick(source.invoice_filename, source.invoiceFilename, source.original_filename, source.name),
@@ -399,10 +661,15 @@ function isMissingRpcError(error) {
     || message.includes('function') && message.includes('schema cache')
 }
 
+function filterVisibleStudies(studies) {
+  return (studies || []).filter(study => study?.status !== 'cancelled')
+}
+
 async function queryStudiesDirect() {
   const { data, error } = await supabase
     .from('studies')
     .select(STUDY_SELECT)
+    .neq('status', 'cancelled')
     .order('created_at', { ascending: false })
 
   return { data, error }
@@ -411,13 +678,13 @@ async function queryStudiesDirect() {
 export async function listStudies() {
   const directResult = await queryStudiesDirect()
   if (!directResult.error && (directResult.data || []).length > 0) {
-    return { data: directResult.data || [], error: null, source: 'direct' }
+    return { data: filterVisibleStudies(directResult.data), error: null, source: 'direct' }
   }
 
   const rpcResult = await queryRpc('get_studies_overview')
   if (!rpcResult.error) {
     return {
-      data: rpcResult.data || [],
+      data: filterVisibleStudies(rpcResult.data),
       error: null,
       source: 'rpc',
       warnings: (directResult.data || []).length === 0 ? ['fallback_rpc_used'] : [],
@@ -428,7 +695,7 @@ export async function listStudies() {
     const warnings = []
     if (isMissingRpcError(rpcResult.error)) warnings.push('missing_studies_rpc')
     if ((directResult.data || []).length === 0) warnings.push('direct_query_returned_empty')
-    return { data: directResult.data || [], error: null, source: 'direct', rpcError: rpcResult.error, warnings }
+    return { data: filterVisibleStudies(directResult.data), error: null, source: 'direct', rpcError: rpcResult.error, warnings }
   }
 
   return { data: [], error: directResult.error || rpcResult.error, source: 'error', rpcError: rpcResult.error }
@@ -441,7 +708,7 @@ export async function getStudyDetail(id) {
     .eq('id', id)
     .maybeSingle()
 
-  if (!error) {
+  if (!error && data) {
     return { data, error: null, source: 'direct' }
   }
 
@@ -450,7 +717,40 @@ export async function getStudyDetail(id) {
     return { data: rpcResult.data?.[0] || null, error: null, source: 'rpc' }
   }
 
+  if (!error) {
+    return { data: data || null, error: null, source: 'direct', rpcError: rpcResult.error }
+  }
+
   return { data: null, error: error || rpcResult.error, source: 'error', rpcError: rpcResult.error }
+}
+
+export async function listRelatedStudies(study) {
+  const clientId = normalizeText(study?.client_id)
+  const dni = getStudyDni(study)
+  const empresaId = normalizeText(study?.empresa_id)
+
+  if (!clientId && !dni) return { data: [], error: null, source: 'empty' }
+
+  let query = supabase
+    .from('studies')
+    .select(STUDY_SELECT)
+    .neq('status', 'cancelled')
+    .order('created_at', { ascending: false })
+
+  if (clientId) {
+    query = query.eq('client_id', clientId)
+  } else {
+    query = query.eq('customer->>dni', dni)
+    if (empresaId) query = query.eq('empresa_id', empresaId)
+  }
+
+  const { data, error } = await query
+
+  return {
+    data: filterVisibleStudies(data || []),
+    error,
+    source: error ? 'error' : 'direct',
+  }
 }
 
 export async function getStudyReservations(id) {
@@ -460,13 +760,17 @@ export async function getStudyReservations(id) {
     .eq('study_id', id)
     .order('created_at', { ascending: false })
 
-  if (!error) {
+  if (!error && (data || []).length > 0) {
     return { data: data || [], error: null, source: 'direct' }
   }
 
   const rpcResult = await queryRpc('get_study_reservations', { p_study_id: id })
   if (!rpcResult.error) {
     return { data: rpcResult.data || [], error: null, source: 'rpc' }
+  }
+
+  if (!error) {
+    return { data: data || [], error: null, source: 'direct', rpcError: rpcResult.error }
   }
 
   return { data: [], error: error || rpcResult.error, source: 'error', rpcError: rpcResult.error }
@@ -481,7 +785,7 @@ export async function getStudyContract(id) {
     .eq('study_id', id)
     .maybeSingle()
 
-  if (!error) {
+  if (!error && data) {
     return { data: data || null, error: null, source: 'direct' }
   }
 
@@ -495,7 +799,50 @@ export async function getStudyContract(id) {
     return { data: null, error, source: 'direct', rpcError: rpcResult.error }
   }
 
+  if (!error) {
+    return { data: data || null, error: null, source: 'direct', rpcError: rpcResult.error }
+  }
+
   return { data: null, error: error || rpcResult.error, source: 'error', rpcError: rpcResult.error }
+}
+
+export async function getStudyInstallation(study, reservations = [], contract = null) {
+  const installationId = pick(
+    study?.selected_installation_id,
+    reservations.find(reservation => reservation.installation_id)?.installation_id,
+    contract?.installation_id
+  )
+
+  if (!installationId) return { data: null, error: null, source: 'empty' }
+
+  const { data, error } = await supabase
+    .from('installations')
+    .select('id, nombre_instalacion, potencia_instalada_kwp, potencia_nominal_kw, direccion, municipio, provincia, cups_generador, fecha_activacion, fecha_activacion_real, distribuidoras(id, nombre, codigo)')
+    .eq('id', installationId)
+    .maybeSingle()
+
+  return { data: data || null, error, source: error ? 'error' : 'direct' }
+}
+
+export async function canCurrentUserDeleteStudies() {
+  const { data: { user }, error: userError } = await supabase.auth.getUser()
+  if (userError || !user) return { data: false, error: userError || null }
+  if (isConfiguredStudyAdminEmail(user.email)) return { data: true, error: null }
+
+  const { data, error } = await supabase
+    .from('user_empresas')
+    .select('role')
+    .eq('user_id', user.id)
+    .eq('role', 'admin')
+    .limit(1)
+
+  if (error) return { data: false, error }
+  return { data: (data || []).length > 0, error: null }
+}
+
+export async function deleteStudyAdmin(id) {
+  const { error } = await supabase.rpc('delete_study_admin', { p_study_id: id })
+  return { error }
 }
 
 export function getStudyCustomer(study) {
@@ -552,7 +899,15 @@ export function getStudyDni(study) {
 
 export function getStudyCups(study) {
   const customer = getStudyCustomer(study)
-  return normalizeText(pick(customer.cups, customer.cups_consumo, customer.cupsConsumo))
+  const invoice = getStudyInvoice(study)
+  return normalizeText(pick(
+    customer.cups,
+    customer.cups_consumo,
+    customer.cupsConsumo,
+    invoice.cups,
+    invoice.cups_consumo,
+    invoice.cupsConsumo
+  ))
 }
 
 export function getStudyIban(study) {
@@ -595,7 +950,14 @@ export function getStudyCountry(study) {
 export function getStudyInvoiceType(study) {
   const customer = getStudyCustomer(study)
   const invoice = getStudyInvoice(study)
-  return normalizeText(pick(invoice.type, invoice.tipoFactura, invoice.tariff_type, customer.tipo_factura))
+  return normalizeText(pick(
+    invoice.type,
+    invoice.tipo_factura,
+    invoice.tipoFactura,
+    invoice.billType,
+    invoice.tariff_type,
+    customer.tipo_factura
+  ))
 }
 
 export function getStudyAverageConsumption(study) {
@@ -603,9 +965,10 @@ export function getStudyAverageConsumption(study) {
   const invoice = getStudyInvoice(study)
   return maybeNumber(
     pick(
-      customer.consumo_medio_mensual_kwh,
       invoice.averageMonthlyConsumptionKwh,
-      invoice.consumoMedioMensual
+      invoice.consumo_medio_mensual_kwh,
+      invoice.consumoMedioMensual,
+      customer.consumo_medio_mensual_kwh
     )
   )
 }
@@ -615,9 +978,11 @@ export function getStudyRealConsumption(study) {
   const invoice = getStudyInvoice(study)
   return maybeNumber(
     pick(
-      customer.consumo_mensual_real_kwh,
+      invoice.currentInvoiceConsumptionKwh,
       invoice.consumptionKwh,
-      invoice.consumoMensualReal
+      invoice.consumo_mensual_real_kwh,
+      invoice.consumoMensualReal,
+      customer.consumo_mensual_real_kwh
     )
   )
 }
@@ -627,8 +992,10 @@ export function getStudyPeriodPrice(study, period) {
   const invoice = getStudyInvoice(study)
   return maybeNumber(
     pick(
+      invoice.periodPricesEurPerKwh?.[period],
+      invoice.periodPricesEurPerKwh?.[period.toLowerCase()],
+      invoice[`precio_${period.toLowerCase()}_eur_kwh`],
       customer[`precio_${period.toLowerCase()}_eur_kwh`],
-      invoice.periodPricesEurPerKwh?.[period]
     )
   )
 }
@@ -649,9 +1016,16 @@ export function getStudyViabilityScore(study) {
   return maybeNumber(getStudyCalculation(study).viabilityScore)
 }
 
-export function getStudyAssignedInstallationName(study) {
+export function getStudyAssignedInstallationName(study, installation = null, reservations = [], contract = null) {
   const snapshot = asObject(study?.selected_installation_snapshot)
-  return normalizeText(pick(snapshot.nombre_instalacion, snapshot.name))
+  return normalizeText(pick(
+    snapshot.nombre_instalacion,
+    snapshot.name,
+    installation?.nombre_instalacion,
+    installation?.name,
+    reservations.find(reservation => reservation.installation_name)?.installation_name,
+    contract?.installation_name
+  ))
 }
 
 export function getStudyDocuments(study) {
@@ -670,7 +1044,7 @@ export async function resolveStudyDocuments(study) {
 
   return Promise.all(documents.map(async document => {
     if (document.url) return document
-    let resolved = await resolveStorageDocument(document, exactFolderPath)
+    let resolved = await resolveStorageDocument(document, exactFolderPath, study)
 
     const lowerError = String(resolved.error || '').toLowerCase()
     if (resolved.error && (
@@ -680,7 +1054,7 @@ export async function resolveStudyDocuments(study) {
     )) {
       const discoveredFolder = await discoverStudyStorageFolder(study, source, document.bucket)
       if (discoveredFolder && discoveredFolder !== exactFolderPath) {
-        resolved = await resolveStorageDocument(document, discoveredFolder)
+        resolved = await resolveStorageDocument(document, discoveredFolder, study)
       }
     }
 

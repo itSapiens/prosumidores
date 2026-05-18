@@ -1,0 +1,6 @@
+gcloud config set project generadorpropuestas
+
+gcloud builds submit . `
+  --config cloudbuild.yaml `
+  --project generadorpropuestas `
+  --substitutions="_VITE_SUPABASE_URL=https://ojhoirazbfqqzclfrxmg.supabase.co,_VITE_SUPABASE_ANON_KEY=sb_publishable_XqzeEMXuSGdi2ljekNSD9Q_hkCIhH7b"

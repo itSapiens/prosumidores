@@ -160,6 +160,32 @@ export async function parsearExcel(file) {
       }
     })
 
+    const filasPorSuministro = new Map()
+    resultado.forEach(item => {
+      const dni = (item.datos.dni || '').toString().trim().toUpperCase()
+      const cups = (item.datos.cups || '').toString().trim().toUpperCase()
+      if (!dni) return
+      const key = `${dni}::${cups || 'SIN_CUPS'}`
+      if (!filasPorSuministro.has(key)) filasPorSuministro.set(key, [])
+      filasPorSuministro.get(key).push(item)
+    })
+
+    filasPorSuministro.forEach(items => {
+      if (items.length <= 1) return
+      const filasDuplicadas = items.map(item => item.fila).join(', ')
+      const cups = (items[0].datos.cups || '').toString().trim().toUpperCase()
+      const mensaje = cups
+        ? `NIF/CIF y CUPS duplicados en el Excel (filas ${filasDuplicadas})`
+        : `NIF/CIF duplicado sin CUPS en el Excel (filas ${filasDuplicadas})`
+      items.forEach(item => {
+        item.errores = [
+          ...(item.errores || []),
+          mensaje,
+        ]
+        item.valido = false
+      })
+    })
+
     return {
       total: resultado.length,
       validos: resultado.filter(r => r.valido).length,

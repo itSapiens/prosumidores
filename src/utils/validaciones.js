@@ -14,6 +14,7 @@
 export const normalizarNIF = (v) => (v || '').trim().toUpperCase().replace(/\s/g, '')
 export const normalizarIBAN = (v) => (v || '').trim().toUpperCase().replace(/\s/g, '')
 export const normalizarCUPS = (v) => (v || '').trim().toUpperCase().replace(/\s/g, '')
+export const normalizarCAU = (v) => (v || '').trim().toUpperCase().replace(/\s/g, '')
 export const normalizarEmail = (v) => (v || '').trim().toLowerCase()
 export const normalizarTelefono = (v) => (v || '').trim().replace(/[\s\-.()]/g, '')
 
@@ -112,6 +113,16 @@ export function validarCUPS(valor) {
   const primero = Math.floor(n / 23)
   const segundo = n % 23
   return letras === CUPS_ALFABETO[primero] + CUPS_ALFABETO[segundo]
+}
+
+// ------------------------------------------------------------
+// CAU (Código de Autoconsumo)
+// Formato operativo usado por distribuidoras: ES + 24 caracteres
+// alfanuméricos. Ejemplo: ES0021000010245403JG1FA000 (26 chars).
+// ------------------------------------------------------------
+export function validarCAU(valor) {
+  const v = normalizarCAU(valor)
+  return /^ES[A-Z0-9]{24}$/.test(v)
 }
 
 // ------------------------------------------------------------

@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase.js'
 import StudyDetailView from '../components/StudyDetailView.jsx'
 import {
   STUDY_STATUS_LABELS,
+  canCurrentUserDeleteStudies,
+  deleteStudyAdmin,
   formatNumber,
   getStudyAnnualSavings,
   getStudyAssignedInstallationName,
@@ -12,10 +14,14 @@ import {
   getStudyDocuments,
   getStudyEmail,
   getStudyRecommendedPower,
+  getStudyContract,
   getStudyDetail,
+  getStudyInstallation,
   getStudyReservations,
+  listRelatedStudies,
   listStudies,
 } from '../lib/studies.js'
+import { mapSupabaseError } from '../lib/errors.js'
 
 function StatusPill({ status }) {
   const meta = STUDY_STATUS_LABELS[status] || { label: status || '—', color: 'pill-gray' }
@@ -46,6 +52,11 @@ export default function Estudios() {
   const [selectedStudyId, setSelectedStudyId] = useState(null)
   const [selectedStudy, setSelectedStudy] = useState(null)
   const [selectedReservations, setSelectedReservations] = useState([])
+  const [selectedContract, setSelectedContract] = useState(null)
+  const [selectedInstallation, setSelectedInstallation] = useState(null)
+  const [selectedRelatedStudies, setSelectedRelatedStudies] = useState([])
+  const [canDeleteStudies, setCanDeleteStudies] = useState(false)
+  const [deletingStudyId, setDeletingStudyId] = useState(null)
 
   useEffect(() => { cargarDatos() }, [])
 
@@ -67,6 +78,7 @@ export default function Estudios() {
       listStudies(),
       supabase.from('installations').select('id, nombre_instalacion').order('nombre_instalacion'),
     ])
+    const permissionResult = await canCurrentUserDeleteStudies()
 
     if (studiesResult.error) {
       console.error('studies error:', studiesResult.error.message || studiesResult.error)
@@ -81,8 +93,13 @@ export default function Estudios() {
       console.error('installations error:', installationsResult.error.message || installationsResult.error)
     }
 
+    if (permissionResult.error) {
+      console.error('delete studies permission error:', permissionResult.error.message || permissionResult.error)
+    }
+
     setEstudios(studiesResult.data || [])
     setInstalaciones(installationsResult.data || [])
+    setCanDeleteStudies(Boolean(permissionResult.data))
     setLoading(false)
   }
 
@@ -90,19 +107,27 @@ export default function Estudios() {
     setSelectedStudyId(study.id)
     setSelectedStudy(study)
     setSelectedReservations([])
+    setSelectedContract(null)
+    setSelectedInstallation(null)
+    setSelectedRelatedStudies([])
     setDrawerError('')
     setLoadingDrawer(true)
 
-    const [detailResult, reservationsResult] = await Promise.all([
+    const [detailResult, reservationsResult, contractResult] = await Promise.all([
       getStudyDetail(study.id),
       getStudyReservations(study.id),
+      getStudyContract(study.id),
     ])
+
+    const nextStudy = detailResult.data || study
+    const nextReservations = reservationsResult.data || []
+    const nextContract = contractResult.data || null
 
     if (detailResult.error) {
       console.error('study detail error:', detailResult.error.message || detailResult.error)
       setDrawerError('No se pudo cargar el detalle completo del estudio.')
     } else {
-      setSelectedStudy(detailResult.data || study)
+      setSelectedStudy(nextStudy)
     }
 
     if (reservationsResult.error) {
@@ -110,7 +135,28 @@ export default function Estudios() {
       setDrawerError(prev => prev || 'No se pudieron cargar las reservas vinculadas.')
     }
 
-    setSelectedReservations(reservationsResult.data || [])
+    if (contractResult.error) {
+      console.error('study contract error:', contractResult.error.message || contractResult.error)
+      setDrawerError(prev => prev || 'No se pudo cargar el contrato vinculado.')
+    }
+
+    const [installationResult, relatedResult] = await Promise.all([
+      getStudyInstallation(nextStudy, nextReservations, nextContract),
+      listRelatedStudies(nextStudy),
+    ])
+    if (installationResult.error) {
+      console.error('study installation error:', installationResult.error.message || installationResult.error)
+      setDrawerError(prev => prev || 'No se pudo cargar la instalación vinculada.')
+    }
+    if (relatedResult.error) {
+      console.error('related studies error:', relatedResult.error.message || relatedResult.error)
+      setDrawerError(prev => prev || 'No se pudieron cargar los estudios relacionados.')
+    }
+
+    setSelectedReservations(nextReservations)
+    setSelectedContract(nextContract)
+    setSelectedInstallation(installationResult.data || null)
+    setSelectedRelatedStudies(relatedResult.data || [])
     setLoadingDrawer(false)
   }
 
@@ -118,7 +164,27 @@ export default function Estudios() {
     setSelectedStudyId(null)
     setSelectedStudy(null)
     setSelectedReservations([])
+    setSelectedContract(null)
+    setSelectedInstallation(null)
+    setSelectedRelatedStudies([])
     setDrawerError('')
+  }
+
+  async function eliminarEstudio(study) {
+    const nombre = getStudyDisplayName(study) || 'este estudio'
+    if (!confirm(`¿Eliminar definitivamente el estudio de ${nombre}? Esta acción quitará el estudio de la app y desvinculará sus reservas.`)) return
+
+    setDeletingStudyId(study.id)
+    const { error } = await deleteStudyAdmin(study.id)
+    setDeletingStudyId(null)
+
+    if (error) {
+      alert(mapSupabaseError(error, { entidad: 'estudio' }))
+      return
+    }
+
+    setEstudios(prev => prev.filter(item => item.id !== study.id))
+    if (selectedStudyId === study.id) cerrarDrawer()
   }
 
   const filtrados = useMemo(() => {
@@ -136,15 +202,25 @@ export default function Estudios() {
     })
   }, [estudios, filtroEstado, filtroInstalacion, filtroNombre])
 
+  const metricStudies = useMemo(() => {
+    if (!filtroInstalacion) return estudios
+    return estudios.filter(study => study.selected_installation_id === filtroInstalacion)
+  }, [estudios, filtroInstalacion])
+
   const metrics = useMemo(() => {
-    const totalPotencia = estudios.reduce((acc, study) => acc + (getStudyRecommendedPower(study) || 0), 0)
+    const totalPotencia = metricStudies.reduce((acc, study) => acc + (getStudyRecommendedPower(study) || 0), 0)
     return {
-      total: estudios.length,
-      asignados: estudios.filter(study => study.selected_installation_id).length,
-      conPreview: estudios.filter(study => getStudyDocuments(study).length > 0).length,
+      total: metricStudies.length,
+      asignados: metricStudies.filter(study => study.selected_installation_id).length,
+      conPreview: metricStudies.filter(study => getStudyDocuments(study).length > 0).length,
       potencia: totalPotencia,
     }
-  }, [estudios])
+  }, [metricStudies])
+
+  const selectedInstallationName = useMemo(() => {
+    if (!filtroInstalacion) return ''
+    return instalaciones.find(installation => installation.id === filtroInstalacion)?.nombre_instalacion || ''
+  }, [filtroInstalacion, instalaciones])
 
   return (
     <div style={{ position: 'relative', minHeight: '100%' }}>
@@ -157,13 +233,17 @@ export default function Estudios() {
         </div>
 
         <div className="study-kpi-grid mb-16">
-          <SummaryCard value={metrics.total} label="Estudios cargados" tone="primary" />
+          <SummaryCard
+            value={metrics.total}
+            label={selectedInstallationName ? `Estudios en ${selectedInstallationName}` : 'Estudios cargados'}
+            tone="primary"
+          />
           <SummaryCard value={metrics.asignados} label="Con instalación asignada" />
           <SummaryCard value={metrics.conPreview} label="Con preview listo" />
           <SummaryCard value={`${formatNumber(metrics.potencia, { maximumFractionDigits: 2 }) || '0'} kWp`} label="Potencia recomendada acumulada" />
         </div>
 
-        <div className="flex-row mb-16">
+        <div className="study-filter-bar mb-16">
           <input
             type="text"
             className="form-input"
@@ -228,7 +308,7 @@ export default function Estudios() {
             <div className="empty-sub">En cuanto Supabase responda con datos, aparecerán aquí y se podrán abrir en preview lateral.</div>
           </div>
         ) : (
-          <div className="table-wrap">
+          <div className="table-wrap studies-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -281,6 +361,15 @@ export default function Estudios() {
                         <div className="actions-cell">
                           <button className="btn btn-sm" onClick={() => abrirDrawer(study)}>Preview</button>
                           <button className="btn btn-sm" onClick={() => navigate(`/estudios/${study.id}`)}>Ficha</button>
+                          {canDeleteStudies && (
+                            <button
+                              className="btn btn-sm btn-danger"
+                              onClick={() => eliminarEstudio(study)}
+                              disabled={deletingStudyId === study.id}
+                            >
+                              {deletingStudyId === study.id ? 'Eliminando...' : 'Eliminar'}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -306,6 +395,18 @@ export default function Estudios() {
               </button>
             </div>
 
+            {canDeleteStudies && selectedStudy && (
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={() => eliminarEstudio(selectedStudy)}
+                  disabled={deletingStudyId === selectedStudy.id}
+                >
+                  {deletingStudyId === selectedStudy.id ? 'Eliminando...' : 'Eliminar estudio'}
+                </button>
+              </div>
+            )}
+
             <div className="drawer-body compact">
               {loadingDrawer ? (
                 <div className="loading"><div className="spinner" />Cargando detalle...</div>
@@ -326,9 +427,17 @@ export default function Estudios() {
                   <StudyDetailView
                     study={selectedStudy}
                     reservations={selectedReservations}
+                    contract={selectedContract}
+                    installation={selectedInstallation}
+                    relatedStudies={selectedRelatedStudies}
                     compact
                     onOpenInstallation={installationId => navigate(`/proyectos/${installationId}`)}
                     onOpenFullPage={() => navigate(`/estudios/${selectedStudy.id}`)}
+                    onOpenStudy={studyId => {
+                      const related = selectedRelatedStudies.find(item => item.id === studyId)
+                      if (related) abrirDrawer(related)
+                      else navigate(`/estudios/${studyId}`)
+                    }}
                   />
                 </>
               )}

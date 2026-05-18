@@ -9,6 +9,9 @@ import react from '@vitejs/plugin-react'
 // En dev (`npm run dev`) se conservan, necesarios para debug local.
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
   build: { outDir: 'dist' },
   esbuild: {
     drop: mode === 'production' ? ['console', 'debugger'] : [],

@@ -4,12 +4,14 @@ import Layout from './components/Layout.jsx'
 import Login from './pages/Login.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Proyectos from './pages/Proyectos.jsx'
+import MapaInstalaciones from './pages/MapaInstalaciones.jsx'
 import DetalleProyecto from './pages/DetalleProyecto.jsx'
 import NuevoProyecto from './pages/NuevoProyecto.jsx'
 import Documentos from './pages/Documentos.jsx'
 import Importar from './pages/Importar.jsx'
 import Plantillas from './pages/Plantillas.jsx'
 import Configuracion from './pages/Configuracion.jsx'
+import Usuarios from './pages/Usuarios.jsx'
 import Estudios from './pages/Estudios.jsx'
 import DetalleEstudio from './pages/DetalleEstudio.jsx'
 
@@ -33,6 +35,7 @@ function ProtectedRoutes() {
       <Route index element={<Navigate to="/dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="proyectos" element={<Proyectos />} />
+      <Route path="mapa" element={<MapaInstalaciones />} />
       <Route path="proyectos/nuevo" element={<NuevoProyecto />} />
       <Route path="proyectos/:id" element={<DetalleProyecto />} />
       <Route path="proyectos/:id/datos" element={<NuevoProyecto />} />
@@ -41,6 +44,7 @@ function ProtectedRoutes() {
       <Route path="importar" element={<Importar />} />
       <Route path="plantillas" element={<Plantillas />} />
       <Route path="configuracion" element={<Configuracion />} />
+      <Route path="usuarios" element={<Usuarios />} />
       <Route path="estudios" element={<Estudios />} />
       <Route path="estudios/:id" element={<DetalleEstudio />} />
     </Route>
@@ -65,6 +69,7 @@ function AppRoutes() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="proyectos" element={<Proyectos />} />
+        <Route path="mapa" element={<MapaInstalaciones />} />
         <Route path="proyectos/nuevo" element={<NuevoProyecto />} />
         <Route path="proyectos/:id" element={<DetalleProyecto />} />
         <Route path="proyectos/:id/datos" element={<NuevoProyecto />} />
@@ -73,6 +78,7 @@ function AppRoutes() {
         <Route path="importar" element={<Importar />} />
         <Route path="plantillas" element={<Plantillas />} />
         <Route path="configuracion" element={<Configuracion />} />
+        <Route path="usuarios" element={<Usuarios />} />
         <Route path="estudios" element={<Estudios />} />
         <Route path="estudios/:id" element={<DetalleEstudio />} />
       </Route>

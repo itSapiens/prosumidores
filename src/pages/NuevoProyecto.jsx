@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
-import { validarIBAN, formatearIBAN } from '../utils/validaciones.js'
+import { InstallationPreviewMap } from '../components/InstallationMap.jsx'
+import { normalizarCAU, validarCAU, validarIBAN, formatearIBAN } from '../utils/validaciones.js'
 import { mapSupabaseError } from '../lib/errors.js'
 
 const ORIENTACIONES = [
@@ -147,10 +148,14 @@ export default function NuevoProyecto() {
     if (!form.potencia_instalada_kwp || isNaN(form.potencia_instalada_kwp)) e.potencia_instalada_kwp = 'Valor inválido'
     if (!form.contractable_kwp_total || isNaN(form.contractable_kwp_total)) e.contractable_kwp_total = 'Valor inválido'
     if (!form.modalidad) e.modalidad = 'Obligatorio'
+    if (form.lat !== '' && (isNaN(form.lat) || Number(form.lat) < -90 || Number(form.lat) > 90)) e.lat = 'Latitud entre -90 y 90'
+    if (form.lng !== '' && (isNaN(form.lng) || Number(form.lng) < -180 || Number(form.lng) > 180)) e.lng = 'Longitud entre -180 y 180'
     if (form.inclinacion !== '' && (isNaN(form.inclinacion) || form.inclinacion < 0 || form.inclinacion > 90))
       e.inclinacion = 'Entre 0° y 90°'
     if (form.iban_aportaciones.trim() && !validarIBAN(form.iban_aportaciones))
       e.iban_aportaciones = 'IBAN español inválido (formato ES + 22 dígitos con dígito de control correcto)'
+    if (form.cups_generador.trim() && !validarCAU(form.cups_generador))
+      e.cups_generador = 'CAU inválido. Debe tener 26 caracteres y empezar por ES'
     setErrores(e)
     return Object.keys(e).length === 0
   }
@@ -183,7 +188,7 @@ export default function NuevoProyecto() {
         calculo_estudios: form.calculo_estudios,
         potencia_fija_kwp: form.calculo_estudios === 'fijo' ? num(form.potencia_fija_kwp) : null,
         contractable_kwp_total: parseFloat(form.contractable_kwp_total),
-        cups_generador: form.cups_generador?.trim() || null,
+        cups_generador: normalizarCAU(form.cups_generador) || null,
         distribuidora_id: form.distribuidora_id || null,
         tipo_reparto: form.tipo_reparto,
         fecha_activacion: form.fecha_activacion || null,
@@ -332,13 +337,24 @@ export default function NuevoProyecto() {
           </div>
           <div className="form-group">
             <label className="form-label">Latitud</label>
-            <input className="form-input" type="number" step="any"
+            <input className={`form-input${errores.lat ? ' error' : ''}`} type="number" step="any"
               value={form.lat} onChange={e => set('lat', e.target.value)} placeholder="40.4168" />
+            {errores.lat && <span className="form-error">{errores.lat}</span>}
           </div>
           <div className="form-group">
             <label className="form-label">Longitud</label>
-            <input className="form-input" type="number" step="any"
+            <input className={`form-input${errores.lng ? ' error' : ''}`} type="number" step="any"
               value={form.lng} onChange={e => set('lng', e.target.value)} placeholder="-3.7038" />
+            {errores.lng && <span className="form-error">{errores.lng}</span>}
+          </div>
+          <div className="form-group full">
+            <label className="form-label">Preview de ubicación</label>
+            <InstallationPreviewMap
+              lat={form.lat}
+              lng={form.lng}
+              title={form.nombre_instalacion || 'Nueva instalación'}
+            />
+            <span className="form-hint">El círculo marca un radio de 5 km alrededor de las coordenadas indicadas.</span>
           </div>
         </div>
       </div>
@@ -552,11 +568,13 @@ export default function NuevoProyecto() {
         <div className="form-grid">
           <div className="form-group">
             <label className="form-label">CAU generación</label>
-            <input className="form-input text-mono" style={{ fontSize: 12 }}
+            <input className={`form-input text-mono${errores.cups_generador ? ' error' : ''}`} style={{ fontSize: 12 }}
               value={form.cups_generador}
-              onChange={e => set('cups_generador', e.target.value.toUpperCase())}
-              placeholder="ES0021000025045781ZA" maxLength={22} />
-            <span className="form-hint">20–22 caracteres. Empieza por ES.</span>
+              onChange={e => set('cups_generador', normalizarCAU(e.target.value))}
+              placeholder="ES0021000010245403JG1FA000" maxLength={26} />
+            {errores.cups_generador
+              ? <span className="form-error">{errores.cups_generador}</span>
+              : <span className="form-hint">26 caracteres. Empieza por ES. Ej: ES0021000010245403JG1FA000</span>}
           </div>
           <div className="form-group">
             <label className="form-label">Distribuidora</label>

@@ -24,7 +24,7 @@ export default function Importar() {
     let cancelado = false
     supabase
       .from('installations')
-      .select('id, nombre_instalacion')
+      .select('id, nombre_instalacion, empresa_id')
       .eq('active', true)
       .then(({ data }) => {
         if (!cancelado) setInstalaciones(data || [])
@@ -62,19 +62,24 @@ export default function Importar() {
     setImportados(0)
     setErroresImport([])
 
-    // Obtener empresa_id del usuario (necesario por la constraint UNIQUE(empresa_id, dni))
-    const { data: membership, error: membershipError } = await supabase
-      .from('user_empresas')
-      .select('empresa_id')
-      .limit(1)
-      .maybeSingle()
+    let empresa_id = instalaciones.find(i => i.id === installationId)?.empresa_id || null
+    if (!empresa_id) {
+      const { data: installation, error: installationError } = await supabase
+        .from('installations')
+        .select('empresa_id')
+        .eq('id', installationId)
+        .maybeSingle()
+      if (installationError) {
+        console.error('installation empresa error:', installationError)
+      }
+      empresa_id = installation?.empresa_id || null
+    }
 
-    if (membershipError || !membership?.empresa_id) {
+    if (!empresa_id) {
       setImportando(false)
-      alert('No se pudo determinar tu empresa. Contacta con el administrador.')
+      alert('No se pudo determinar la empresa titular de la instalación seleccionada. Revisa la instalación o contacta con el administrador.')
       return
     }
-    const empresa_id = membership.empresa_id
 
     let importadosCount = 0
     const erroresDetalle = []
@@ -104,11 +109,41 @@ export default function Importar() {
         tipo_factura: ['2.0TD', '3.0TD', '6.1TD', '2TD', '3TD'].includes(d.tipo_factura) ? d.tipo_factura : '2TD',
       }
 
-      const { data: client, error: clientError } = await supabase
+      let client = null
+      let clientError = null
+
+      let existingClientQuery = supabase
         .from('clients')
-        .upsert(clientPayload, { onConflict: 'empresa_id,dni' })
         .select('id')
-        .single()
+        .eq('empresa_id', empresa_id)
+        .eq('dni', dni)
+
+      existingClientQuery = clientPayload.cups
+        ? existingClientQuery.eq('cups', clientPayload.cups)
+        : existingClientQuery.is('cups', null)
+
+      const { data: existingClient, error: existingClientError } = await existingClientQuery.maybeSingle()
+
+      if (existingClientError) {
+        clientError = existingClientError
+      } else if (existingClient?.id) {
+        const updateResult = await supabase
+          .from('clients')
+          .update(clientPayload)
+          .eq('id', existingClient.id)
+          .select('id')
+          .single()
+        client = updateResult.data
+        clientError = updateResult.error
+      } else {
+        const insertResult = await supabase
+          .from('clients')
+          .insert(clientPayload)
+          .select('id')
+          .single()
+        client = insertResult.data
+        clientError = insertResult.error
+      }
 
       if (clientError || !client) {
         erroresDetalle.push({
@@ -142,6 +177,7 @@ export default function Importar() {
         ;({ error: partError } = await supabase
           .from('participes')
           .insert({
+            empresa_id,
             installation_id: installationId,
             client_id: client.id,
             coeficiente_reparto: coef,
